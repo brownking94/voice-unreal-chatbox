@@ -3,7 +3,6 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
-#include <fstream>
 #include <iostream>
 #include <mutex>
 #include <string>
@@ -108,87 +107,6 @@ static bool send_and_receive(socket_t sock, const std::vector<uint8_t>& pcm_data
 
     std::string response(resp_buf.begin(), resp_buf.end());
     std::cout << ">> " << response << std::endl;
-    return true;
-}
-
-// ── WAV file reader ─────────────────────────────────────────────────────────
-
-struct WavData {
-    uint16_t channels;
-    uint32_t sample_rate;
-    uint16_t bits_per_sample;
-    std::vector<uint8_t> pcm_data;
-};
-
-static bool read_wav(const std::string& path, WavData& wav) {
-    std::ifstream file(path, std::ios::binary);
-    if (!file) {
-        std::cerr << "Cannot open file: " << path << std::endl;
-        return false;
-    }
-
-    char riff[4];
-    file.read(riff, 4);
-    if (std::memcmp(riff, "RIFF", 4) != 0) {
-        std::cerr << "Not a RIFF file" << std::endl;
-        return false;
-    }
-
-    uint32_t file_size;
-    file.read(reinterpret_cast<char*>(&file_size), 4);
-
-    char wave[4];
-    file.read(wave, 4);
-    if (std::memcmp(wave, "WAVE", 4) != 0) {
-        std::cerr << "Not a WAVE file" << std::endl;
-        return false;
-    }
-
-    bool found_fmt = false, found_data = false;
-    while (file && !(found_fmt && found_data)) {
-        char chunk_id[4];
-        uint32_t chunk_size;
-        file.read(chunk_id, 4);
-        file.read(reinterpret_cast<char*>(&chunk_size), 4);
-
-        if (!file) break;
-
-        if (std::memcmp(chunk_id, "fmt ", 4) == 0) {
-            uint16_t audio_format;
-            file.read(reinterpret_cast<char*>(&audio_format), 2);
-            file.read(reinterpret_cast<char*>(&wav.channels), 2);
-            file.read(reinterpret_cast<char*>(&wav.sample_rate), 4);
-            uint32_t byte_rate;
-            file.read(reinterpret_cast<char*>(&byte_rate), 4);
-            uint16_t block_align;
-            file.read(reinterpret_cast<char*>(&block_align), 2);
-            file.read(reinterpret_cast<char*>(&wav.bits_per_sample), 2);
-
-            if (audio_format != 1) {
-                std::cerr << "Not PCM format (format=" << audio_format << ")" << std::endl;
-                return false;
-            }
-
-            if (chunk_size > 16) {
-                file.seekg(chunk_size - 16, std::ios::cur);
-            }
-            found_fmt = true;
-
-        } else if (std::memcmp(chunk_id, "data", 4) == 0) {
-            wav.pcm_data.resize(chunk_size);
-            file.read(reinterpret_cast<char*>(wav.pcm_data.data()), chunk_size);
-            found_data = true;
-
-        } else {
-            file.seekg(chunk_size, std::ios::cur);
-        }
-    }
-
-    if (!found_fmt || !found_data) {
-        std::cerr << "Missing fmt or data chunk" << std::endl;
-        return false;
-    }
-
     return true;
 }
 
@@ -394,72 +312,10 @@ static int run_mic_mode(const std::string& host, uint16_t port) {
     return 0;
 }
 
-// ── WAV file mode ───────────────────────────────────────────────────────────
-
-static int run_wav_mode(const std::string& wav_path, const std::string& host, uint16_t port) {
-    WavData wav;
-    if (!read_wav(wav_path, wav)) {
-        return 1;
-    }
-
-    std::cout << "WAV: " << wav.channels << " ch, "
-              << wav.sample_rate << " Hz, "
-              << wav.bits_per_sample << " bit, "
-              << wav.pcm_data.size() << " bytes" << std::endl;
-
-    if (wav.bits_per_sample != 16) {
-        std::cerr << "Warning: expected 16-bit audio, got " << wav.bits_per_sample << "-bit" << std::endl;
-    }
-    if (wav.sample_rate != 16000) {
-        std::cerr << "Warning: expected 16000 Hz, got " << wav.sample_rate << " Hz" << std::endl;
-        std::cerr << "Whisper expects 16 kHz mono — transcription quality may suffer." << std::endl;
-    }
-
-    platform_init();
-
-    socket_t sock = socket(AF_INET, SOCK_STREAM, 0);
-    if (sock == SOCKET_INVALID) {
-        std::cerr << "Failed to create socket" << std::endl;
-        return 1;
-    }
-
-    sockaddr_in addr{};
-    addr.sin_family = AF_INET;
-    addr.sin_port   = htons(port);
-    inet_pton(AF_INET, host.c_str(), &addr.sin_addr);
-
-    std::cout << "Connecting to " << host << ":" << port << "..." << std::endl;
-
-    if (connect(sock, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) < 0) {
-        std::cerr << "Failed to connect to server" << std::endl;
-        CLOSE_SOCKET(sock);
-        platform_cleanup();
-        return 1;
-    }
-
-    std::cout << "Connected. Sending " << wav.pcm_data.size() << " bytes of audio..." << std::endl;
-
-    if (!send_and_receive(sock, wav.pcm_data)) {
-        CLOSE_SOCKET(sock);
-        platform_cleanup();
-        return 1;
-    }
-
-    CLOSE_SOCKET(sock);
-    platform_cleanup();
-    return 0;
-}
-
 // ── Main ────────────────────────────────────────────────────────────────────
 
 static void print_usage(const char* prog) {
-    std::cerr << "Usage:" << std::endl;
-    std::cerr << "  " << prog << " --mic [-s <host>] [-p <port>]" << std::endl;
-    std::cerr << "  " << prog << " <wav_file> [-s <host>] [-p <port>]" << std::endl;
-    std::cerr << std::endl;
-    std::cerr << "Modes:" << std::endl;
-    std::cerr << "  --mic        Capture live audio with voice activity detection" << std::endl;
-    std::cerr << "  <wav_file>   Send a 16-bit PCM WAV file (16 kHz mono)" << std::endl;
+    std::cerr << "Usage: " << prog << " [-s <host>] [-p <port>]" << std::endl;
     std::cerr << std::endl;
     std::cerr << "Options:" << std::endl;
     std::cerr << "  -s <host>    Server host (default: 127.0.0.1)" << std::endl;
@@ -467,35 +323,20 @@ static void print_usage(const char* prog) {
 }
 
 int main(int argc, char* argv[]) {
-    std::string wav_path;
     std::string host = "127.0.0.1";
     uint16_t port = 9090;
-    bool mic_mode = false;
 
     for (int i = 1; i < argc; i++) {
         std::string arg = argv[i];
-        if (arg == "--mic") {
-            mic_mode = true;
-        } else if (arg == "-s" && i + 1 < argc) {
+        if (arg == "-s" && i + 1 < argc) {
             host = argv[++i];
         } else if (arg == "-p" && i + 1 < argc) {
             port = static_cast<uint16_t>(std::atoi(argv[++i]));
-        } else if (arg == "--help") {
+        } else if (arg == "--help" || arg == "-h") {
             print_usage(argv[0]);
             return 0;
-        } else if (wav_path.empty()) {
-            wav_path = arg;
         }
     }
 
-    if (!mic_mode && wav_path.empty()) {
-        print_usage(argv[0]);
-        return 1;
-    }
-
-    if (mic_mode) {
-        return run_mic_mode(host, port);
-    } else {
-        return run_wav_mode(wav_path, host, port);
-    }
+    return run_mic_mode(host, port);
 }

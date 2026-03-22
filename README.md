@@ -36,10 +36,7 @@ A lightweight local server built with standard C++ and whisper.cpp. It has no de
 
 ### Test Client (Standalone C++)
 
-A standalone client for testing the server without Unreal Engine. Supports two modes:
-
-- **Mic mode (`--mic`):** Captures live audio from the microphone with automatic voice activity detection (VAD). Detects when you start and stop speaking, then sends the audio chunk to the server automatically.
-- **WAV mode:** Sends a pre-recorded WAV file to the server for transcription.
+A standalone client for testing the server without Unreal Engine. Captures live audio from the microphone with automatic voice activity detection (VAD). Detects when you start and stop speaking, then sends the audio chunk to the server automatically.
 
 ### Unreal Engine Client (Unreal C++ / Blueprints) — not yet implemented
 
@@ -96,11 +93,8 @@ make model
 # Start the server (auto-downloads model if missing)
 make run-server
 
-# In another terminal — live mic with VAD
-make run-mic
-
-# Or send a WAV file
-make run-client WAV_FILE=path/to/audio.wav
+# In another terminal — start the mic client
+make run-client
 ```
 
 ### Available Whisper Models

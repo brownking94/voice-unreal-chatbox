@@ -2,9 +2,8 @@ BUILD_DIR   := build
 BUILD_TYPE  := Release
 MODEL_PATH  := models/ggml-medium.en.bin
 PORT        := 9090
-WAV_FILE    ?= test.wav
 
-.PHONY: all build configure clean run run-server run-client run-mic model ensure-model
+.PHONY: all build configure clean run run-server run-client model ensure-model
 
 all: build
 
@@ -27,10 +26,7 @@ ensure-model:
 	fi
 
 run-client: build
-	./$(BUILD_DIR)/test-client $(WAV_FILE) -p $(PORT)
-
-run-mic: build
-	./$(BUILD_DIR)/test-client --mic -p $(PORT)
+	./$(BUILD_DIR)/test-client -p $(PORT)
 
 model:
 	@mkdir -p models
