@@ -1,0 +1,8 @@
+build/
+models/*.bin
+models/*.en
+*.wav
+.DS_Store
+CMakeUserPresets.json
+.cache/
+compile_commands.json

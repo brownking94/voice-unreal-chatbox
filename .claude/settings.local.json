@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cmake -B build -DCMAKE_BUILD_TYPE=Release)",
+      "Bash(brew --prefix cmake)",
+      "Read(//opt/homebrew/opt/cmake/bin/**)",
+      "Bash(/opt/homebrew/opt/cmake/bin/cmake --version)",
+      "Bash(brew list:*)",
+      "Bash(xcode-select -p)",
+      "Bash(clang++ --version)",
+      "Bash(brew install:*)"
+    ]
+  }
+}
