@@ -44,13 +44,14 @@ int main(int argc, char* argv[]) {
     TranscriberPool pool(model_path, workers);
 
     // Handler borrows a model instance from the pool, transcribes, returns it
-    Server server(port, [&pool](const std::vector<uint8_t>& audio_data) -> std::string {
+    Server server(port, [&pool](int client_id, const std::vector<uint8_t>& audio_data) -> std::string {
+        std::string speaker = "Player" + std::to_string(client_id);
         std::string text = pool.transcribe(audio_data);
         if (text.empty()) {
             return protocol::make_error("No speech detected");
         }
-        std::cout << "[main] Transcription: " << text << std::endl;
-        return protocol::make_response("Player1", text);
+        std::cout << "[" << speaker << "] " << text << std::endl;
+        return protocol::make_response(speaker, text);
     });
 
     std::cout << "[main] Starting voice server on port " << port

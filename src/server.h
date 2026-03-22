@@ -24,9 +24,9 @@
     constexpr socket_t SOCKET_INVALID = -1;
 #endif
 
-// Callback: receives raw PCM audio bytes, returns transcribed JSON response.
+// Callback: receives client ID and raw PCM audio bytes, returns transcribed JSON response.
 // Must be thread-safe — called from multiple client threads concurrently.
-using AudioHandler = std::function<std::string(const std::vector<uint8_t>& audio_data)>;
+using AudioHandler = std::function<std::string(int client_id, const std::vector<uint8_t>& audio_data)>;
 
 class Server {
 public:

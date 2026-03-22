@@ -137,10 +137,10 @@ void Server::handle_client(socket_t client_sock, int client_id) {
             break;
         }
 
-        std::cout << "[server] Received " << payload_len << " bytes of audio" << std::endl;
+        std::cout << "[server] Client #" << client_id << " sent " << payload_len << " bytes of audio" << std::endl;
 
         // Run transcription via the pool (thread-safe, borrows a model instance)
-        std::string response = handler_(audio);
+        std::string response = handler_(client_id, audio);
 
         // Send response: [4-byte length][JSON]
         uint32_t resp_len = static_cast<uint32_t>(response.size());

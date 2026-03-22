@@ -68,6 +68,7 @@ The server supports multiple simultaneous clients. Each client connection is han
 - Multiple clients talking at the same time get truly parallel transcription (up to N concurrent)
 - If all instances are busy, the next request waits until one frees up (~1-2 seconds)
 - Memory is fixed at startup — no per-client allocation
+- Each client is assigned a unique ID (Player1, Player2, etc.) that appears in logs and JSON responses
 
 | Workers | RAM (medium.en) | Parallel transcriptions |
 |---------|-----------------|------------------------|
@@ -89,9 +90,10 @@ Client → Server:  [4-byte big-endian uint32 length][raw 16-bit PCM audio, 16 k
 Server → Client:  [4-byte big-endian uint32 length][JSON response]
 ```
 
-JSON responses:
+JSON responses (speaker is assigned per client connection):
 ```json
 {"speaker": "Player1", "text": "anyone see that dragon?"}
+{"speaker": "Player2", "text": "over here!"}
 {"error": "No speech detected"}
 ```
 
