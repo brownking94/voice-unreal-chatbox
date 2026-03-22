@@ -31,6 +31,7 @@ A lightweight local server built with standard C++ and whisper.cpp. It has no de
 - Listens on a local TCP socket for incoming audio data
 - Runs Whisper inference using the `ggml-medium.en` model (configurable)
 - Returns transcribed text as JSON (e.g. `{"speaker": "Player1", "text": "anyone see that dragon?"}`)
+- **Multi-client support** with a thread-per-client model and a transcriber pool for parallel inference
 - Uses Metal/Accelerate on macOS, CPU (or CUDA) on Windows
 - Cross-platform: macOS and Windows
 
@@ -57,6 +58,27 @@ The test client uses energy-based VAD to automatically detect speech and manage 
 4. **Send** — Chunk is sent to the server for transcription. Returns to idle.
 
 If the speaker talks for longer than 30 seconds, the chunk is force-sent and a new chunk begins recording immediately with no gap — this uses a double-buffer design where the callback writes to one buffer while the main loop drains the other.
+
+## Multi-Client & Transcriber Pool
+
+The server supports multiple simultaneous clients. Each client connection is handled in its own thread, and transcription runs through a **pool of pre-loaded whisper model instances**.
+
+- At startup, the server loads N model instances into memory (default: 2)
+- When a client sends audio, a free instance is borrowed from the pool
+- Multiple clients talking at the same time get truly parallel transcription (up to N concurrent)
+- If all instances are busy, the next request waits until one frees up (~1-2 seconds)
+- Memory is fixed at startup — no per-client allocation
+
+| Workers | RAM (medium.en) | Parallel transcriptions |
+|---------|-----------------|------------------------|
+| 1 | ~2.6 GB | Sequential only |
+| 2 (default) | ~5.2 GB | 2 concurrent |
+| 4 | ~10.4 GB | 4 concurrent |
+
+Override at launch:
+```bash
+make run-server WORKERS=4
+```
 
 ## Wire Protocol
 
@@ -120,10 +142,11 @@ make run-server MODEL_PATH=models/ggml-small.en.bin
 ├── src/
 │   ├── main.cpp            # Server entry point
 │   ├── server.h/cpp        # Cross-platform TCP socket server
-│   ├── transcriber.h/cpp   # Whisper inference wrapper
-│   └── protocol.h/cpp      # JSON message formatting
+│   ├── transcriber.h/cpp        # Whisper inference wrapper
+│   ├── transcriber_pool.h/cpp   # Thread-safe pool of transcriber instances
+│   └── protocol.h/cpp           # JSON message formatting
 ├── test_client/
-│   └── test_client.cpp     # Test client (mic + WAV modes)
+│   └── test_client.cpp          # Test client (live mic with VAD)
 └── models/                 # Whisper model files (gitignored)
 ```
 
@@ -139,6 +162,6 @@ make run-server MODEL_PATH=models/ggml-small.en.bin
 These are out of scope for the prototype but worth noting for later iterations.
 
 - Multi-language translation using a local LLM (e.g. llama.cpp) as a second processing stage
-- Multi-player support with speaker identification
+- Speaker identification (currently all transcriptions are labeled "Player1")
 - Streaming / partial transcription display (text appears word by word)
 - Packaging the Whisper server as a DLL loaded directly by Unreal instead of a separate process

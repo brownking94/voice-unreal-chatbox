@@ -3,6 +3,7 @@
 #include <cstring>
 #include <iostream>
 #include <stdexcept>
+#include <thread>
 
 #ifdef _WIN32
     #define CLOSE_SOCKET closesocket
@@ -87,19 +88,21 @@ void Server::run() {
                                          reinterpret_cast<sockaddr*>(&client_addr),
                                          &client_len);
         if (client_sock == SOCKET_INVALID) {
-            if (!running_) break;  // stop() closed the socket
+            if (!running_) break;
             std::cerr << "[server] Accept failed, continuing..." << std::endl;
             continue;
         }
 
         char ip[INET_ADDRSTRLEN];
         inet_ntop(AF_INET, &client_addr.sin_addr, ip, sizeof(ip));
-        std::cout << "[server] Client connected from " << ip << std::endl;
+        int client_id = client_count_.fetch_add(1) + 1;
+        std::cout << "[server] Client #" << client_id << " connected from " << ip << std::endl;
 
-        handle_client(client_sock);
-
-        CLOSE_SOCKET(client_sock);
-        std::cout << "[server] Client disconnected" << std::endl;
+        std::thread([this, client_sock, client_id]() {
+            handle_client(client_sock, client_id);
+            CLOSE_SOCKET(client_sock);
+            std::cout << "[server] Client #" << client_id << " disconnected" << std::endl;
+        }).detach();
     }
 }
 
@@ -111,8 +114,7 @@ void Server::stop() {
     }
 }
 
-void Server::handle_client(socket_t client_sock) {
-    // Process messages in a loop until the client disconnects
+void Server::handle_client(socket_t client_sock, int client_id) {
     while (running_) {
         // Read 4-byte length header
         uint8_t len_buf[4];
@@ -137,7 +139,7 @@ void Server::handle_client(socket_t client_sock) {
 
         std::cout << "[server] Received " << payload_len << " bytes of audio" << std::endl;
 
-        // Run transcription
+        // Run transcription via the pool (thread-safe, borrows a model instance)
         std::string response = handler_(audio);
 
         // Send response: [4-byte length][JSON]

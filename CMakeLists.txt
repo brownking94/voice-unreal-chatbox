@@ -33,6 +33,7 @@ add_executable(voice-server
     src/main.cpp
     src/server.cpp
     src/transcriber.cpp
+    src/transcriber_pool.cpp
     src/protocol.cpp
 )
 

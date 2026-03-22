@@ -2,6 +2,7 @@ BUILD_DIR   := build
 BUILD_TYPE  := Release
 MODEL_PATH  := models/ggml-medium.en.bin
 PORT        := 9090
+WORKERS     := 2
 
 .PHONY: all build configure clean run run-server run-client model ensure-model
 
@@ -16,7 +17,7 @@ build: configure
 run: run-server
 
 run-server: build ensure-model
-	./$(BUILD_DIR)/voice-server -m $(MODEL_PATH) -p $(PORT)
+	./$(BUILD_DIR)/voice-server -m $(MODEL_PATH) -p $(PORT) -w $(WORKERS)
 
 ensure-model:
 	@if [ ! -f $(MODEL_PATH) ]; then \

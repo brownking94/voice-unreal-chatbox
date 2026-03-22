@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <cstdint>
 #include <functional>
 #include <string>
@@ -23,7 +24,8 @@
     constexpr socket_t SOCKET_INVALID = -1;
 #endif
 
-// Callback: receives raw PCM audio bytes, returns transcribed JSON response
+// Callback: receives raw PCM audio bytes, returns transcribed JSON response.
+// Must be thread-safe — called from multiple client threads concurrently.
 using AudioHandler = std::function<std::string(const std::vector<uint8_t>& audio_data)>;
 
 class Server {
@@ -36,12 +38,13 @@ public:
     void stop();
 
 private:
-    void handle_client(socket_t client_sock);
+    void handle_client(socket_t client_sock, int client_id);
     bool recv_all(socket_t sock, void* buf, size_t len);
     bool send_all(socket_t sock, const void* buf, size_t len);
 
-    uint16_t    port_;
-    AudioHandler handler_;
-    socket_t    listen_sock_ = SOCKET_INVALID;
-    bool        running_ = false;
+    uint16_t          port_;
+    AudioHandler      handler_;
+    socket_t          listen_sock_ = SOCKET_INVALID;
+    std::atomic<bool> running_{false};
+    std::atomic<int>  client_count_{0};
 };
