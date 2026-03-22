@@ -19,6 +19,15 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(whisper)
 
+# ── miniaudio (single-header audio capture library) ──────────────────────────
+FetchContent_Declare(
+    miniaudio
+    GIT_REPOSITORY https://github.com/mackron/miniaudio.git
+    GIT_TAG        0.11.21
+    GIT_SHALLOW    TRUE
+)
+FetchContent_MakeAvailable(miniaudio)
+
 # ── Voice server executable ──────────────────────────────────────────────────
 add_executable(voice-server
     src/main.cpp
@@ -50,8 +59,19 @@ add_executable(test-client
     test_client/test_client.cpp
 )
 
-target_include_directories(test-client PRIVATE src)
+target_include_directories(test-client PRIVATE src ${miniaudio_SOURCE_DIR})
 
 if(WIN32)
     target_link_libraries(test-client PRIVATE ws2_32)
+endif()
+
+if(APPLE)
+    find_library(COREAUDIO_LIBRARY CoreAudio)
+    find_library(AUDIOTOOLBOX_LIBRARY AudioToolbox)
+    if(COREAUDIO_LIBRARY)
+        target_link_libraries(test-client PRIVATE ${COREAUDIO_LIBRARY})
+    endif()
+    if(AUDIOTOOLBOX_LIBRARY)
+        target_link_libraries(test-client PRIVATE ${AUDIOTOOLBOX_LIBRARY})
+    endif()
 endif()
