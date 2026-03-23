@@ -146,6 +146,9 @@ make build
 # Download the whisper model (~1.5 GB, only needed once)
 make model
 
+# Update profanity word list from all sources
+make update-filter
+
 # Start the server (auto-downloads model if missing)
 make run-server
 
