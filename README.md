@@ -85,13 +85,30 @@ make run-server WORKERS=4
 
 Transcribed text is run through a profanity filter before being returned to the client. The filter uses a dictionary-based approach with a configurable word list.
 
-- Loaded from `config/profanity.txt` (one word or phrase per line, 400+ entries)
+- Loaded into memory at server startup from `config/profanity.txt` (~2,900 words from 4 open source lists)
+- Single words are stored in a hash set (`std::unordered_set`) for O(1) lookups
+- Multi-word phrases are stored separately and matched via substring scan
 - Case-insensitive matching with word boundary detection
-- Supports multi-word phrases (e.g. "dirty sanchez")
 - Flagged words are replaced with asterisks in the redacted output
 - The response includes the original text, list of flagged words, and redacted version
 
-Custom word list:
+### Updating the word list
+
+The word list is aggregated from multiple open source repositories. Run the update script to fetch the latest from all sources and merge with any custom words you've added locally:
+
+```bash
+make update-filter
+```
+
+Sources:
+- [LDNOOBW](https://github.com/LDNOOBW/List-of-Dirty-Naughty-Obscene-and-Otherwise-Bad-Words) — curated list (~400 words)
+- [zacanger/profane-words](https://github.com/zacanger/profane-words) — comprehensive list (~2,700 words)
+- [web-mech/badwords](https://github.com/web-mech/badwords) — npm bad-words package (~450 words)
+- [better_profanity](https://github.com/snguyenthanh/better_profanity) — Python profanity library (~800 words)
+
+To add a new source, edit the `SOURCES` array in `scripts/update-profanity.sh`.
+
+Custom word list path:
 ```bash
 make run-server FILTER_PATH=config/my-custom-list.txt
 ```
@@ -165,6 +182,8 @@ make run-server MODEL_PATH=models/ggml-small.en.bin
 │   └── protocol.h/cpp           # JSON message formatting
 ├── config/
 │   └── profanity.txt            # Bad word list (one per line, editable)
+├── scripts/
+│   └── update-profanity.sh      # Fetches & merges word lists from multiple repos
 ├── test_client/
 │   └── test_client.cpp          # Test client (live mic with VAD)
 └── models/                      # Whisper model files (gitignored)

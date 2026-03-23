@@ -5,7 +5,7 @@ PORT        := 9090
 WORKERS     := 2
 FILTER_PATH := config/profanity.txt
 
-.PHONY: all build configure clean run run-server run-client model ensure-model
+.PHONY: all build configure clean run run-server run-client model ensure-model update-filter
 
 all: build
 
@@ -33,6 +33,9 @@ run-client: build
 model:
 	@mkdir -p models
 	curl -L -o $(MODEL_PATH) https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-medium.en.bin
+
+update-filter:
+	./scripts/update-profanity.sh
 
 clean:
 	rm -rf $(BUILD_DIR)
