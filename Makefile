@@ -3,6 +3,7 @@ BUILD_TYPE  := Release
 MODEL_PATH  := models/ggml-medium.en.bin
 PORT        := 9090
 WORKERS     := 2
+FILTER_PATH := config/profanity.txt
 
 .PHONY: all build configure clean run run-server run-client model ensure-model
 
@@ -17,7 +18,7 @@ build: configure
 run: run-server
 
 run-server: build ensure-model
-	./$(BUILD_DIR)/voice-server -m $(MODEL_PATH) -p $(PORT) -w $(WORKERS)
+	./$(BUILD_DIR)/voice-server -m $(MODEL_PATH) -p $(PORT) -w $(WORKERS) -f $(FILTER_PATH)
 
 ensure-model:
 	@if [ ! -f $(MODEL_PATH) ]; then \

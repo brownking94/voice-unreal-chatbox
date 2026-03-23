@@ -34,6 +34,7 @@ add_executable(voice-server
     src/server.cpp
     src/transcriber.cpp
     src/transcriber_pool.cpp
+    src/filter.cpp
     src/protocol.cpp
 )
 

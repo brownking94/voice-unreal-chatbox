@@ -81,6 +81,21 @@ Override at launch:
 make run-server WORKERS=4
 ```
 
+## Profanity Filter
+
+Transcribed text is run through a profanity filter before being returned to the client. The filter uses a dictionary-based approach with a configurable word list.
+
+- Loaded from `config/profanity.txt` (one word or phrase per line, 400+ entries)
+- Case-insensitive matching with word boundary detection
+- Supports multi-word phrases (e.g. "dirty sanchez")
+- Flagged words are replaced with asterisks in the redacted output
+- The response includes the original text, list of flagged words, and redacted version
+
+Custom word list:
+```bash
+make run-server FILTER_PATH=config/my-custom-list.txt
+```
+
 ## Wire Protocol
 
 Length-prefixed messages over TCP:
@@ -92,9 +107,9 @@ Server → Client:  [4-byte big-endian uint32 length][JSON response]
 
 JSON responses (speaker is assigned per client connection):
 ```json
-{"speaker": "Player1", "text": "anyone see that dragon?"}
-{"speaker": "Player2", "text": "over here!"}
-{"error": "No speech detected"}
+{"speaker":"Player1","original":" anyone see that dragon?","flagged_words":[],"redacted":" anyone see that dragon?"}
+{"speaker":"Player2","original":" what the fuck is that","flagged_words":["fuck"],"redacted":" what the **** is that"}
+{"error":"No speech detected"}
 ```
 
 ## Quick Start
@@ -139,17 +154,20 @@ make run-server MODEL_PATH=models/ggml-small.en.bin
 ### Project Structure
 
 ```
-├── CMakeLists.txt          # Build config (fetches whisper.cpp + miniaudio)
-├── Makefile                # Convenience targets for build/run
+├── CMakeLists.txt               # Build config (fetches whisper.cpp + miniaudio)
+├── Makefile                     # Convenience targets for build/run
 ├── src/
-│   ├── main.cpp            # Server entry point
-│   ├── server.h/cpp        # Cross-platform TCP socket server
+│   ├── main.cpp                 # Server entry point
+│   ├── server.h/cpp             # Cross-platform TCP socket server
 │   ├── transcriber.h/cpp        # Whisper inference wrapper
 │   ├── transcriber_pool.h/cpp   # Thread-safe pool of transcriber instances
+│   ├── filter.h/cpp             # Profanity filter (dictionary-based)
 │   └── protocol.h/cpp           # JSON message formatting
+├── config/
+│   └── profanity.txt            # Bad word list (one per line, editable)
 ├── test_client/
 │   └── test_client.cpp          # Test client (live mic with VAD)
-└── models/                 # Whisper model files (gitignored)
+└── models/                      # Whisper model files (gitignored)
 ```
 
 ## Scope and Constraints
