@@ -113,6 +113,27 @@ Custom word list path:
 make run-server FILTER_PATH=config/my-custom-list.txt
 ```
 
+### Moderation pipeline
+
+When `flagged_words` is non-empty, the event can be forwarded to a separate moderation service for further action. This keeps the voice server fast (filter and respond immediately) while offloading enforcement decisions to a dedicated system.
+
+```
+audio → transcribe → filter → respond to client (redacted text)
+                        │
+                        └──► if flagged_words not empty:
+                                push to moderation queue
+                                    │
+                                    ▼
+                              moderation service
+                              - track per-player flag frequency
+                              - issue warnings after N flags
+                              - temporary mute after repeated offenses
+                              - escalate to human review if needed
+                              - log original text for audit trail
+```
+
+This is not yet implemented but the response format is designed to support it — the `flagged_words` array gives downstream services exactly what they need to decide on an action without re-parsing the text.
+
 ## Wire Protocol
 
 Length-prefixed messages over TCP:
