@@ -115,7 +115,7 @@ static bool send_and_receive(socket_t sock, const std::vector<uint8_t>& pcm_data
 static constexpr uint32_t MIC_SAMPLE_RATE     = 16000;
 static constexpr uint32_t MIC_CHANNELS        = 1;
 static constexpr float    VAD_ENERGY_THRESHOLD = 0.005f;   // RMS threshold to detect speech
-static constexpr float    SILENCE_TIMEOUT_SEC  = 1.2f;     // Seconds of silence before auto-send
+static constexpr float    SILENCE_TIMEOUT_SEC  = 0.7f;     // Seconds of silence before auto-send
 static constexpr float    MAX_CHUNK_SEC        = 30.0f;    // Hard cap per chunk
 static constexpr uint32_t MAX_CHUNK_SAMPLES    = static_cast<uint32_t>(MIC_SAMPLE_RATE * MAX_CHUNK_SEC);
 
