@@ -179,13 +179,26 @@ make run-client
 
 ### Available Whisper Models
 
-| Model | Size | Quality | `MODEL_PATH` |
-|-------|------|---------|-------------|
-| `tiny.en` | ~75 MB | Basic | `models/ggml-tiny.en.bin` |
-| `base.en` | ~142 MB | Good | `models/ggml-base.en.bin` |
-| `small.en` | ~466 MB | Great | `models/ggml-small.en.bin` |
-| `medium.en` | ~1.5 GB | Excellent (default) | `models/ggml-medium.en.bin` |
-| `large-v3` | ~3 GB | Best (multilingual) | `models/ggml-large-v3.bin` |
+| Model | Size | Quality | Inference (~5s clip, M4 Max) | Expected total latency | `MODEL_PATH` |
+|-------|------|---------|-------------------------------|----------------------|-------------|
+| `tiny.en` | ~75 MB | Basic | ~0.1s | ~1.5s | `models/ggml-tiny.en.bin` |
+| `base.en` | ~142 MB | Good | ~0.2s | ~1.5s | `models/ggml-base.en.bin` |
+| `small.en` | ~466 MB | Great | ~0.5s | ~2s | `models/ggml-small.en.bin` |
+| `medium.en` | ~1.5 GB | Excellent (default) | ~1-2s | ~2.5-3.5s | `models/ggml-medium.en.bin` |
+| `large-v3` | ~3 GB | Best (multilingual) | ~3-5s | ~4.5-6.5s | `models/ggml-large-v3.bin` |
+
+**NVIDIA GPU estimates** (for a ~5s audio clip with CUDA):
+
+| Model | RTX 3060 | RTX 3080 | RTX 4090 |
+|-------|----------|----------|----------|
+| `tiny.en` | ~0.1s | ~0.05s | ~0.03s |
+| `base.en` | ~0.2s | ~0.1s | ~0.05s |
+| `small.en` | ~0.5s | ~0.3s | ~0.15s |
+| `medium.en` | ~1.5s | ~0.8s | ~0.4s |
+| `large-v3` | ~4s | ~2s | ~1s |
+
+Total latency = VAD silence timeout (1.2s) + inference + network (<1ms localhost) + filter (<1ms).
+Inference time scales roughly linearly with audio length. Expect 2-3x slower on CPU-only compared to GPU.
 
 Override the default model:
 ```bash
