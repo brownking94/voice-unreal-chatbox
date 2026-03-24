@@ -1,6 +1,6 @@
 BUILD_DIR   := build
 BUILD_TYPE  := Release
-MODEL_PATH  := models/ggml-medium.en.bin
+MODEL_PATH  := models/ggml-small.en.bin
 PORT        := 9090
 WORKERS     := 2
 FILTER_PATH := config/profanity.txt
