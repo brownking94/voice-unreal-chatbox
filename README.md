@@ -70,11 +70,11 @@ The server supports multiple simultaneous clients. Each client connection is han
 - Memory is fixed at startup — no per-client allocation
 - Each client is assigned a unique ID (Player1, Player2, etc.) that appears in logs and JSON responses
 
-| Workers | RAM (medium.en) | Parallel transcriptions |
-|---------|-----------------|------------------------|
-| 1 | ~2.6 GB | Sequential only |
-| 2 (default) | ~5.2 GB | 2 concurrent |
-| 4 | ~10.4 GB | 4 concurrent |
+| Workers | RAM (small.en) | Parallel transcriptions |
+|---------|----------------|------------------------|
+| 1 | ~1.0 GB | Sequential only |
+| 2 (default) | ~2.0 GB | 2 concurrent |
+| 4 | ~4.0 GB | 4 concurrent |
 
 Override at launch:
 ```bash
@@ -157,8 +157,7 @@ JSON responses (speaker is assigned per client connection):
 - CMake 3.20+
 - C++17 compiler (clang, MSVC, or gcc)
 - macOS or Windows
-- **Optional:** [NVIDIA CUDA Toolkit 13.2+](https://developer.nvidia.com/cuda-downloads) for GPU-accelerated inference on Windows (enabled by default when detected)
-- **Tested GPUs:** RTX 5070 (Blackwell), RTX 40-series (Ada Lovelace). Consumer Blackwell GPUs (RTX 5070/5080/5090) require targeting sm_89 instead of sm_120a — this is handled automatically in CMakeLists.txt
+- **Optional:** [NVIDIA CUDA Toolkit 13.2+](https://developer.nvidia.com/cuda-downloads) for GPU-accelerated inference on Windows (enabled by default when detected). Tested with RTX 5070 and RTX 40-series
 
 ### Build and Run
 
@@ -185,7 +184,8 @@ make run-client
 # CUDA is enabled by default when NVIDIA CUDA Toolkit is installed
 cmake -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo
 
-# Build (incremental — only recompiles changed files)
+# Build — first build takes 10-15 min (CUDA kernel compilation)
+# Subsequent builds are incremental and only recompile changed files
 cmake --build build --config RelWithDebInfo
 
 # Download a whisper model (only needed once)
@@ -257,6 +257,13 @@ make run-server MODEL_PATH=models/ggml-small.en.bin
 │   └── test_client.cpp          # Test client (live mic with VAD)
 └── models/                      # Whisper model files (gitignored)
 ```
+
+## GPU Notes
+
+- **macOS**: Uses Metal/Accelerate automatically. Apple Silicon's unified memory and AMX coprocessor make CPU-only inference fast enough for real-time use even without explicit GPU offload.
+- **Windows**: Requires NVIDIA CUDA. Without GPU acceleration, x86 CPU inference is too slow for real-time use (~2x realtime for `small.en`).
+- **Consumer Blackwell GPUs** (RTX 5070/5080/5090): The build targets sm_89 (Ada Lovelace) instead of sm_120a. This is because ggml's CUDA backend enables MXFP4 block-scale MMA instructions on sm_120a that only work on data-center Blackwell chips (B200), not consumer cards. sm_89 is forward-compatible and runs correctly on all RTX 30/40/50 series GPUs.
+- **Verify GPU usage**: Run `nvidia-smi` while the server is transcribing. You should see GPU memory allocated and utilization > 0%. If GPU memory shows 0 MiB, CUDA inference is not working and the server has fallen back to CPU.
 
 ## Scope and Constraints
 
