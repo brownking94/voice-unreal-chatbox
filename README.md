@@ -158,6 +158,7 @@ JSON responses (speaker is assigned per client connection):
 - C++17 compiler (clang, MSVC, or gcc)
 - macOS or Windows
 - **Optional:** [NVIDIA CUDA Toolkit 13.2+](https://developer.nvidia.com/cuda-downloads) for GPU-accelerated inference on Windows (enabled by default when detected). Tested with RTX 5070 and RTX 40-series
+- **NVIDIA driver**: Must support CUDA 13.2+. Run `nvidia-smi` to check — the "CUDA Version" in the top-right must be >= 13.2. Update to the latest Game Ready or Studio driver if needed
 
 ### Build and Run
 
@@ -263,7 +264,26 @@ make run-server MODEL_PATH=models/ggml-small.en.bin
 - **macOS**: Uses Metal/Accelerate automatically. Apple Silicon's unified memory and AMX coprocessor make CPU-only inference fast enough for real-time use even without explicit GPU offload.
 - **Windows**: Requires NVIDIA CUDA. Without GPU acceleration, x86 CPU inference is too slow for real-time use (~2x realtime for `small.en`).
 - **Consumer Blackwell GPUs** (RTX 5070/5080/5090): The build targets sm_89 (Ada Lovelace) instead of sm_120a. This is because ggml's CUDA backend enables MXFP4 block-scale MMA instructions on sm_120a that only work on data-center Blackwell chips (B200), not consumer cards. sm_89 is forward-compatible and runs correctly on all RTX 30/40/50 series GPUs.
-- **Verify GPU usage**: Run `nvidia-smi` while the server is transcribing. You should see GPU memory allocated and utilization > 0%. If GPU memory shows 0 MiB, CUDA inference is not working and the server has fallen back to CPU.
+- **Driver version matters**: The NVIDIA driver must support the CUDA version the code was compiled against (13.2). If the driver is too old, the CUDA backend will silently fail and inference falls back to CPU with no error message. Update to the latest Game Ready driver to fix this.
+
+### Verifying GPU usage
+
+Run `nvidia-smi` after starting the server:
+
+```
+nvidia-smi
+```
+
+You should see GPU memory allocated by the server even before any client connects (the model is loaded at startup):
+
+```
+|   0  NVIDIA GeForce RTX 5070 ...  |   1518MiB /   8151MiB |      0%      Default |
+```
+
+If GPU memory shows **0 MiB** with the server running, CUDA is not working. Common causes:
+1. **Driver too old** — run `nvidia-smi` and check "CUDA Version" in the top-right is >= 13.2
+2. **Missing ggml-cuda.dll** — verify it exists next to the executable in `build/RelWithDebInfo/`
+3. **Wrong CUDA architecture** — rebuild after checking CMakeLists.txt targets a compatible sm version
 
 ## Scope and Constraints
 
