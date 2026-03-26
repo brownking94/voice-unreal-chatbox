@@ -9,11 +9,8 @@
 #include <thread>
 #include <vector>
 
-// ── miniaudio ───────────────────────────────────────────────────────────────
-#define MINIAUDIO_IMPLEMENTATION
-#include "miniaudio.h"
-
-// ── Cross-platform socket includes ──────────────────────────────────────────
+// ── Cross-platform socket includes (must precede miniaudio to avoid
+//    winsock.h / winsock2.h redefinition conflicts on Windows) ────────────────
 #ifdef _WIN32
     #ifndef WIN32_LEAN_AND_MEAN
         #define WIN32_LEAN_AND_MEAN
@@ -42,6 +39,10 @@
     static void platform_init() {}
     static void platform_cleanup() {}
 #endif
+
+// ── miniaudio ───────────────────────────────────────────────────────────────
+#define MINIAUDIO_IMPLEMENTATION
+#include "miniaudio.h"
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 

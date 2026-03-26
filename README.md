@@ -161,26 +161,46 @@ JSON responses (speaker is assigned per client connection):
 
 ### Build and Run
 
+#### macOS (Make)
+
 ```bash
 # Build everything (fetches whisper.cpp and miniaudio automatically)
-# CUDA is enabled by default — requires NVIDIA CUDA Toolkit installed
 make build
 
-# Build without CUDA (CPU only)
-cmake -B build -DENABLE_CUDA=OFF -DCMAKE_BUILD_TYPE=Release
-cmake --build build --config Release
-
-# Download the whisper model (~1.5 GB, only needed once)
+# Download the whisper model (~466 MB for small.en, only needed once)
 make model
-
-# Update profanity word list from all sources
-make update-filter
 
 # Start the server (auto-downloads model if missing)
 make run-server
 
 # In another terminal — start the mic client
 make run-client
+```
+
+#### Windows (CMake + CUDA)
+
+```bash
+# Configure (CUDA enabled by default when NVIDIA CUDA Toolkit is installed)
+cmake -B build -DCMAKE_BUILD_TYPE=Debug
+
+# Build
+cmake --build build --config Debug
+
+# Download a whisper model (only needed once)
+mkdir models
+curl -L -o models/ggml-small.en.bin https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.en.bin
+
+# Start the server
+build\Debug\voice-server.exe -m models/ggml-small.en.bin -p 9090 -w 2 -f config/profanity.txt
+
+# In another terminal — start the mic client
+build\Debug\test-client.exe -p 9090
+```
+
+To build without CUDA (CPU only):
+```bash
+cmake -B build -DENABLE_CUDA=OFF -DCMAKE_BUILD_TYPE=Debug
+cmake --build build --config Debug
 ```
 
 Shared libraries (ggml, whisper, ggml-cuda, etc.) are automatically copied next to the executables after each build.
@@ -205,7 +225,7 @@ Shared libraries (ggml, whisper, ggml-cuda, etc.) are automatically copied next 
 | `medium.en` | ~1.5s | ~0.8s | ~0.4s |
 | `large-v3` | ~4s | ~2s | ~1s |
 
-Total latency = VAD silence timeout (1.2s) + inference + network (<1ms localhost) + filter (<1ms).
+Total latency = VAD silence timeout (700ms) + inference + network (<1ms localhost) + filter (<1ms).
 Inference time scales roughly linearly with audio length. Expect 2-3x slower on CPU-only compared to GPU.
 
 Override the default model:
