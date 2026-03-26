@@ -180,10 +180,11 @@ make run-client
 #### Windows (CMake + CUDA)
 
 ```bash
-# Configure (CUDA enabled by default when NVIDIA CUDA Toolkit is installed)
+# Configure — only needed once, or after editing CMakeLists.txt
+# CUDA is enabled by default when NVIDIA CUDA Toolkit is installed
 cmake -B build -DCMAKE_BUILD_TYPE=Debug
 
-# Build
+# Build (incremental — only recompiles changed files)
 cmake --build build --config Debug
 
 # Download a whisper model (only needed once)
@@ -197,11 +198,13 @@ build\Debug\voice-server.exe -m models/ggml-small.en.bin -p 9090 -w 2 -f config/
 build\Debug\test-client.exe -p 9090
 ```
 
-To build without CUDA (CPU only):
+To build without CUDA (CPU only), pass `-DENABLE_CUDA=OFF` during configure:
 ```bash
 cmake -B build -DENABLE_CUDA=OFF -DCMAKE_BUILD_TYPE=Debug
 cmake --build build --config Debug
 ```
+
+> **Note:** Avoid deleting the `build/` directory unless necessary — CUDA kernel compilation is slow. Incremental builds only recompile what changed.
 
 Shared libraries (ggml, whisper, ggml-cuda, etc.) are automatically copied next to the executables after each build.
 
