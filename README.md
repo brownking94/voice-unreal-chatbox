@@ -32,7 +32,7 @@ A lightweight local server built with standard C++ and whisper.cpp. It has no de
 - Runs Whisper inference using the `ggml-medium.en` model (configurable)
 - Returns transcribed text as JSON (e.g. `{"speaker": "Player1", "text": "anyone see that dragon?"}`)
 - **Multi-client support** with a thread-per-client model and a transcriber pool for parallel inference
-- Uses Metal/Accelerate on macOS, CPU (or CUDA) on Windows
+- Uses Metal/Accelerate on macOS, NVIDIA CUDA on Windows (falls back to CPU)
 - Cross-platform: macOS and Windows
 
 ### Test Client (Standalone C++)
@@ -157,12 +157,18 @@ JSON responses (speaker is assigned per client connection):
 - CMake 3.20+
 - C++17 compiler (clang, MSVC, or gcc)
 - macOS or Windows
+- **Optional:** [NVIDIA CUDA Toolkit](https://developer.nvidia.com/cuda-downloads) for GPU-accelerated inference on Windows (enabled by default when detected)
 
 ### Build and Run
 
 ```bash
 # Build everything (fetches whisper.cpp and miniaudio automatically)
+# CUDA is enabled by default — requires NVIDIA CUDA Toolkit installed
 make build
+
+# Build without CUDA (CPU only)
+cmake -B build -DENABLE_CUDA=OFF -DCMAKE_BUILD_TYPE=Release
+cmake --build build --config Release
 
 # Download the whisper model (~1.5 GB, only needed once)
 make model
@@ -176,6 +182,8 @@ make run-server
 # In another terminal — start the mic client
 make run-client
 ```
+
+Shared libraries (ggml, whisper, ggml-cuda, etc.) are automatically copied next to the executables after each build.
 
 ### Available Whisper Models
 

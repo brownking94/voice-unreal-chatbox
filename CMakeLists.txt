@@ -11,6 +11,18 @@ include(FetchContent)
 set(WHISPER_BUILD_TESTS    OFF CACHE BOOL "" FORCE)
 set(WHISPER_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 
+# ── NVIDIA CUDA acceleration ─────────────────────────────────────────────────
+option(ENABLE_CUDA "Enable NVIDIA CUDA GPU acceleration" ON)
+if(ENABLE_CUDA)
+    set(GGML_CUDA ON CACHE BOOL "" FORCE)
+    # CUDA 13+ CCCL headers require the standard-conforming preprocessor on MSVC.
+    # Use -Xcompiler so nvcc forwards the flag to cl.exe instead of consuming it.
+    if(MSVC)
+        add_compile_options($<$<COMPILE_LANGUAGE:C,CXX>:/Zc:preprocessor>)
+        add_compile_options($<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=/Zc:preprocessor>)
+    endif()
+endif()
+
 FetchContent_Declare(
     whisper
     GIT_REPOSITORY https://github.com/ggerganov/whisper.cpp.git
@@ -77,3 +89,15 @@ if(APPLE)
         target_link_libraries(test-client PRIVATE ${AUDIOTOOLBOX_LIBRARY})
     endif()
 endif()
+
+# ── Copy shared libraries next to executables after build ────────────────────
+# On multi-config generators (MSVC) DLLs land in bin/<config>/ but the
+# executables land in <config>/.  Copy so the exe can find them at runtime.
+foreach(target voice-server test-client)
+    add_custom_command(TARGET ${target} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            $<TARGET_FILE_DIR:whisper>
+            $<TARGET_FILE_DIR:${target}>
+        COMMENT "Copying shared libraries next to ${target}"
+    )
+endforeach()
