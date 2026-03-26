@@ -15,6 +15,11 @@ set(WHISPER_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 option(ENABLE_CUDA "Enable NVIDIA CUDA GPU acceleration" ON)
 if(ENABLE_CUDA)
     set(GGML_CUDA ON CACHE BOOL "" FORCE)
+    # Target sm_89 (Ada Lovelace) which is forward-compatible with Blackwell
+    # consumer GPUs.  ggml forcibly rewrites 12X → 12Xa, enabling MXFP4
+    # block-scale MMA instructions that only work on data-center Blackwell
+    # (sm_120a), not consumer RTX 5070/5080/5090.  Using 89 sidesteps this.
+    set(CMAKE_CUDA_ARCHITECTURES "89" CACHE STRING "" FORCE)
     # CUDA 13+ CCCL headers require the standard-conforming preprocessor on MSVC.
     # Use -Xcompiler so nvcc forwards the flag to cl.exe instead of consuming it.
     if(MSVC)
@@ -26,7 +31,7 @@ endif()
 FetchContent_Declare(
     whisper
     GIT_REPOSITORY https://github.com/ggerganov/whisper.cpp.git
-    GIT_TAG        v1.7.4
+    GIT_TAG        v1.8.4
     GIT_SHALLOW    TRUE
 )
 FetchContent_MakeAvailable(whisper)

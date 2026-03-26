@@ -29,7 +29,7 @@ The system is two separate processes communicating over a local TCP socket.
 A lightweight local server built with standard C++ and whisper.cpp. It has no dependency on Unreal Engine.
 
 - Listens on a local TCP socket for incoming audio data
-- Runs Whisper inference using the `ggml-medium.en` model (configurable)
+- Runs Whisper inference using the `ggml-small.en` model (configurable)
 - Returns transcribed text as JSON (e.g. `{"speaker": "Player1", "text": "anyone see that dragon?"}`)
 - **Multi-client support** with a thread-per-client model and a transcriber pool for parallel inference
 - Uses Metal/Accelerate on macOS, NVIDIA CUDA on Windows (falls back to CPU)
@@ -54,7 +54,7 @@ The test client uses energy-based VAD to automatically detect speech and manage 
 
 1. **Idle** — Mic is listening but discarding audio. No memory growth.
 2. **Recording** — Speech detected (RMS energy above threshold). Audio is buffered.
-3. **Trailing silence** — Speech stopped. Waits 1.2 seconds to confirm the speaker is done.
+3. **Trailing silence** — Speech stopped. Waits 700ms to confirm the speaker is done.
 4. **Send** — Chunk is sent to the server for transcription. Returns to idle.
 
 If the speaker talks for longer than 30 seconds, the chunk is force-sent and a new chunk begins recording immediately with no gap — this uses a double-buffer design where the callback writes to one buffer while the main loop drains the other.
@@ -157,7 +157,8 @@ JSON responses (speaker is assigned per client connection):
 - CMake 3.20+
 - C++17 compiler (clang, MSVC, or gcc)
 - macOS or Windows
-- **Optional:** [NVIDIA CUDA Toolkit](https://developer.nvidia.com/cuda-downloads) for GPU-accelerated inference on Windows (enabled by default when detected)
+- **Optional:** [NVIDIA CUDA Toolkit 13.2+](https://developer.nvidia.com/cuda-downloads) for GPU-accelerated inference on Windows (enabled by default when detected)
+- **Tested GPUs:** RTX 5070 (Blackwell), RTX 40-series (Ada Lovelace). Consumer Blackwell GPUs (RTX 5070/5080/5090) require targeting sm_89 instead of sm_120a — this is handled automatically in CMakeLists.txt
 
 ### Build and Run
 
@@ -182,26 +183,26 @@ make run-client
 ```bash
 # Configure — only needed once, or after editing CMakeLists.txt
 # CUDA is enabled by default when NVIDIA CUDA Toolkit is installed
-cmake -B build -DCMAKE_BUILD_TYPE=Debug
+cmake -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo
 
 # Build (incremental — only recompiles changed files)
-cmake --build build --config Debug
+cmake --build build --config RelWithDebInfo
 
 # Download a whisper model (only needed once)
 mkdir models
 curl -L -o models/ggml-small.en.bin https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.en.bin
 
 # Start the server
-build\Debug\voice-server.exe -m models/ggml-small.en.bin -p 9090 -w 2 -f config/profanity.txt
+build\RelWithDebInfo\voice-server.exe -m models/ggml-small.en.bin -p 9090 -w 2 -f config/profanity.txt
 
 # In another terminal — start the mic client
-build\Debug\test-client.exe -p 9090
+build\RelWithDebInfo\test-client.exe -p 9090
 ```
 
 To build without CUDA (CPU only), pass `-DENABLE_CUDA=OFF` during configure:
 ```bash
-cmake -B build -DENABLE_CUDA=OFF -DCMAKE_BUILD_TYPE=Debug
-cmake --build build --config Debug
+cmake -B build -DENABLE_CUDA=OFF -DCMAKE_BUILD_TYPE=RelWithDebInfo
+cmake --build build --config RelWithDebInfo
 ```
 
 > **Note:** Avoid deleting the `build/` directory unless necessary — CUDA kernel compilation is slow. Incremental builds only recompile what changed.
@@ -214,8 +215,8 @@ Shared libraries (ggml, whisper, ggml-cuda, etc.) are automatically copied next 
 |-------|------|---------|-------------------------------|----------------------|-------------|
 | `tiny.en` | ~75 MB | Basic | ~0.1s | ~1.5s | `models/ggml-tiny.en.bin` |
 | `base.en` | ~142 MB | Good | ~0.2s | ~1.5s | `models/ggml-base.en.bin` |
-| `small.en` | ~466 MB | Great | ~0.5s | ~2s | `models/ggml-small.en.bin` |
-| `medium.en` | ~1.5 GB | Excellent (default) | ~1-2s | ~2.5-3.5s | `models/ggml-medium.en.bin` |
+| `small.en` | ~466 MB | Great (default) | ~0.5s | ~2s | `models/ggml-small.en.bin` |
+| `medium.en` | ~1.5 GB | Excellent | ~1-2s | ~2.5-3.5s | `models/ggml-medium.en.bin` |
 | `large-v3` | ~3 GB | Best (multilingual) | ~3-5s | ~4.5-6.5s | `models/ggml-large-v3.bin` |
 
 **NVIDIA GPU estimates** (for a ~5s audio clip with CUDA):

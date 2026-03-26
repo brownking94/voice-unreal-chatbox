@@ -1,5 +1,5 @@
 BUILD_DIR   := build
-BUILD_TYPE  := Debug
+BUILD_TYPE  := RelWithDebInfo
 MODEL_PATH  := models/ggml-small.en.bin
 PORT        := 9090
 WORKERS     := 2
