@@ -116,10 +116,25 @@ void Server::stop() {
 
 void Server::handle_client(socket_t client_sock, int client_id) {
     while (running_) {
-        // Read 4-byte length header
+        // Read 1-byte locale length + locale string
+        uint8_t locale_len;
+        if (!recv_all(client_sock, &locale_len, 1)) {
+            break;  // Client disconnected
+        }
+        if (locale_len == 0 || locale_len > 16) {
+            std::cerr << "[server] Invalid locale length (" << (int)locale_len << "), dropping" << std::endl;
+            break;
+        }
+        std::vector<char> locale_buf(locale_len);
+        if (!recv_all(client_sock, locale_buf.data(), locale_len)) {
+            break;
+        }
+        std::string locale(locale_buf.begin(), locale_buf.end());
+
+        // Read 4-byte audio length header
         uint8_t len_buf[4];
         if (!recv_all(client_sock, len_buf, 4)) {
-            break;  // Client disconnected
+            break;
         }
 
         uint32_t payload_len = read_u32_be(len_buf);
@@ -137,10 +152,10 @@ void Server::handle_client(socket_t client_sock, int client_id) {
             break;
         }
 
-        std::cout << "[server] Client #" << client_id << " sent " << payload_len << " bytes of audio" << std::endl;
+        std::cout << "[server] Client #" << client_id << " (" << locale << ") sent " << payload_len << " bytes of audio" << std::endl;
 
         // Run transcription via the pool (thread-safe, borrows a model instance)
-        std::string response = handler_(client_id, audio);
+        std::string response = handler_(client_id, locale, audio);
 
         // Send response: [4-byte length][JSON]
         uint32_t resp_len = static_cast<uint32_t>(response.size());

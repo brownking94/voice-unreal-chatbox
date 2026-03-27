@@ -16,7 +16,7 @@ public:
 
     // Borrow a transcriber, transcribe, and return it automatically.
     // Blocks if all instances are in use.
-    std::string transcribe(const std::vector<uint8_t>& pcm16_bytes);
+    std::string transcribe(const std::vector<uint8_t>& pcm16_bytes, const std::string& language = "auto");
 
 private:
     std::mutex              mtx_;

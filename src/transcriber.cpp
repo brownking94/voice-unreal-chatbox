@@ -21,7 +21,7 @@ Transcriber::~Transcriber() {
     }
 }
 
-std::string Transcriber::transcribe(const std::vector<uint8_t>& pcm16_bytes) {
+std::string Transcriber::transcribe(const std::vector<uint8_t>& pcm16_bytes, const std::string& language) {
     // Convert 16-bit signed PCM to float32 [-1.0, 1.0]
     size_t n_samples = pcm16_bytes.size() / 2;
     if (n_samples == 0) return "";
@@ -39,7 +39,7 @@ std::string Transcriber::transcribe(const std::vector<uint8_t>& pcm16_bytes) {
     params.print_realtime   = false;
     params.print_timestamps = false;
     params.single_segment   = false;
-    params.language         = "en";
+    params.language         = language.c_str();
     params.n_threads        = 4;
 
     int ret = whisper_full(ctx_, params, pcm_f32.data(), static_cast<int>(pcm_f32.size()));
@@ -47,6 +47,11 @@ std::string Transcriber::transcribe(const std::vector<uint8_t>& pcm16_bytes) {
         std::cerr << "[transcriber] whisper_full failed with code " << ret << std::endl;
         return "";
     }
+
+    // Log detected language
+    int lang_id = whisper_full_lang_id(ctx_);
+    const char* lang = whisper_lang_str(lang_id);
+    std::cout << "[transcriber] Detected language: " << lang << std::endl;
 
     // Collect all segment texts
     std::string result;

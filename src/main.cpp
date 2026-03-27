@@ -50,9 +50,9 @@ int main(int argc, char* argv[]) {
     ProfanityFilter filter(filter_path);
 
     // Handler: transcribe → filter → respond
-    Server server(port, [&pool, &filter](int client_id, const std::vector<uint8_t>& audio_data) -> std::string {
+    Server server(port, [&pool, &filter](int client_id, const std::string& locale, const std::vector<uint8_t>& audio_data) -> std::string {
         std::string speaker = "Player" + std::to_string(client_id);
-        std::string text = pool.transcribe(audio_data);
+        std::string text = pool.transcribe(audio_data, locale);
         if (text.empty()) {
             return protocol::make_error("No speech detected");
         }

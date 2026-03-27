@@ -29,7 +29,7 @@ The system is two separate processes communicating over a local TCP socket.
 A lightweight local server built with standard C++ and whisper.cpp. It has no dependency on Unreal Engine.
 
 - Listens on a local TCP socket for incoming audio data
-- Runs Whisper inference using the `ggml-small.en` model (configurable)
+- Runs Whisper inference using the multilingual `ggml-small` model (99 languages, configurable)
 - Returns transcribed text as JSON (e.g. `{"speaker": "Player1", "text": "anyone see that dragon?"}`)
 - **Multi-client support** with a thread-per-client model and a transcriber pool for parallel inference
 - Uses Metal/Accelerate on macOS, NVIDIA CUDA on Windows (falls back to CPU)
@@ -136,12 +136,14 @@ This is not yet implemented but the response format is designed to support it �
 
 ## Wire Protocol
 
-Length-prefixed messages over TCP:
+Stateless, length-prefixed messages over TCP. Each audio message includes the client's locale so the server requires no per-client state.
 
 ```
-Client → Server:  [4-byte big-endian uint32 length][raw 16-bit PCM audio, 16 kHz mono]
+Client → Server:  [1-byte locale length][locale string, e.g. "en"][4-byte big-endian uint32 audio length][raw 16-bit PCM audio, 16 kHz mono]
 Server → Client:  [4-byte big-endian uint32 length][JSON response]
 ```
+
+The locale is a whisper language code (e.g. `en`, `ja`, `ko`, `zh`, `auto`). It is sent with every audio chunk, allowing the server to remain completely stateless — no per-client session tracking needed.
 
 JSON responses (speaker is assigned per client connection):
 ```json
@@ -189,15 +191,18 @@ cmake -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo
 # Subsequent builds are incremental and only recompile changed files
 cmake --build build --config RelWithDebInfo
 
-# Download a whisper model (only needed once)
+# Download the multilingual whisper model (only needed once)
 mkdir models
-curl -L -o models/ggml-small.en.bin https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.en.bin
+curl -L -o models/ggml-small.bin https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin
 
 # Start the server
-build\RelWithDebInfo\voice-server.exe -m models/ggml-small.en.bin -p 9090 -w 2 -f config/profanity.txt
+build\RelWithDebInfo\voice-server.exe -m models/ggml-small.bin -p 9090 -w 2 -f config/profanity.txt
 
-# In another terminal — start the mic client
-build\RelWithDebInfo\test-client.exe -p 9090
+# In another terminal — start the mic client (English)
+build\RelWithDebInfo\test-client.exe -p 9090 -l en
+
+# Or start a Japanese client
+build\RelWithDebInfo\test-client.exe -p 9090 -l ja
 ```
 
 To build without CUDA (CPU only), pass `-DENABLE_CUDA=OFF` during configure:
@@ -287,7 +292,7 @@ If GPU memory shows **0 MiB** with the server running, CUDA is not working. Comm
 
 ## Scope and Constraints
 
-- **Language:** English voice to English text only (no translation)
+- **Language:** 99 languages for speech-to-text (translation not yet implemented)
 - **Deployment:** Runs locally on a single machine (Apple Silicon or RTX 3060+ recommended)
 - **Game project:** Any Unreal Engine open world demo — the chat system is game-agnostic
 - **Goal:** Working prototype, not production quality
@@ -296,7 +301,7 @@ If GPU memory shows **0 MiB** with the server running, CUDA is not working. Comm
 
 These are out of scope for the prototype but worth noting for later iterations.
 
-- Multi-language translation using a local LLM (e.g. llama.cpp) as a second processing stage
+- Multi-language translation using NLLB-200 (200 languages, ~1.2 GB) as a second processing stage after STT
 - Speaker identification (currently all transcriptions are labeled "Player1")
 - Streaming / partial transcription display (text appears word by word)
 - Packaging the Whisper server as a DLL loaded directly by Unreal instead of a separate process

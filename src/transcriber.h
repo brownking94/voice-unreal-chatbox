@@ -16,8 +16,9 @@ public:
     Transcriber& operator=(const Transcriber&) = delete;
 
     // Transcribe raw 16-bit PCM audio (16 kHz, mono).
+    // Language should be a whisper language code (e.g. "en", "ja") or "auto".
     // Returns the transcribed text (empty string if nothing detected).
-    std::string transcribe(const std::vector<uint8_t>& pcm16_bytes);
+    std::string transcribe(const std::vector<uint8_t>& pcm16_bytes, const std::string& language = "auto");
 
 private:
     whisper_context* ctx_ = nullptr;

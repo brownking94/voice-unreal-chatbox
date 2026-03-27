@@ -83,7 +83,16 @@ static bool send_all(socket_t sock, const void* buf, size_t len) {
 }
 
 // Send audio data to server and print the transcription response
-static bool send_and_receive(socket_t sock, const std::vector<uint8_t>& pcm_data) {
+// Wire format: [1-byte locale length][locale string][4-byte audio length][audio data]
+static bool send_and_receive(socket_t sock, const std::vector<uint8_t>& pcm_data, const std::string& locale) {
+    // Send locale prefix
+    uint8_t loc_len = static_cast<uint8_t>(locale.size());
+    if (!send_all(sock, &loc_len, 1) || !send_all(sock, locale.data(), loc_len)) {
+        std::cerr << "Failed to send locale" << std::endl;
+        return false;
+    }
+
+    // Send audio
     uint32_t payload_len = static_cast<uint32_t>(pcm_data.size());
     uint8_t hdr[4];
     write_u32_be(hdr, payload_len);
@@ -220,7 +229,7 @@ static void mic_callback(ma_device* device, void* /*output*/, const void* input,
     }
 }
 
-static int run_mic_mode(const std::string& host, uint16_t port) {
+static int run_mic_mode(const std::string& host, uint16_t port, const std::string& locale) {
     platform_init();
 
     socket_t sock = socket(AF_INET, SOCK_STREAM, 0);
@@ -243,7 +252,7 @@ static int run_mic_mode(const std::string& host, uint16_t port) {
         return 1;
     }
 
-    std::cout << "Connected to server." << std::endl;
+    std::cout << "Connected to server. Locale: " << locale << std::endl;
 
     MicState mic_state;
 
@@ -300,7 +309,7 @@ static int run_mic_mode(const std::string& host, uint16_t port) {
         float duration = static_cast<float>(captured.size()) / MIC_SAMPLE_RATE;
         std::cout << "[speech detected: " << duration << "s, sending...]" << std::endl;
 
-        if (!send_and_receive(sock, pcm_bytes)) {
+        if (!send_and_receive(sock, pcm_bytes, locale)) {
             std::cerr << "Server communication failed" << std::endl;
             break;
         }
@@ -316,16 +325,18 @@ static int run_mic_mode(const std::string& host, uint16_t port) {
 // ── Main ────────────────────────────────────────────────────────────────────
 
 static void print_usage(const char* prog) {
-    std::cerr << "Usage: " << prog << " [-s <host>] [-p <port>]" << std::endl;
+    std::cerr << "Usage: " << prog << " [-s <host>] [-p <port>] [-l <locale>]" << std::endl;
     std::cerr << std::endl;
     std::cerr << "Options:" << std::endl;
     std::cerr << "  -s <host>    Server host (default: 127.0.0.1)" << std::endl;
     std::cerr << "  -p <port>    Server port (default: 9090)" << std::endl;
+    std::cerr << "  -l <locale>  Language code for STT, e.g. en, ja, auto (default: en)" << std::endl;
 }
 
 int main(int argc, char* argv[]) {
     std::string host = "127.0.0.1";
     uint16_t port = 9090;
+    std::string locale = "en";
 
     for (int i = 1; i < argc; i++) {
         std::string arg = argv[i];
@@ -333,11 +344,13 @@ int main(int argc, char* argv[]) {
             host = argv[++i];
         } else if (arg == "-p" && i + 1 < argc) {
             port = static_cast<uint16_t>(std::atoi(argv[++i]));
+        } else if (arg == "-l" && i + 1 < argc) {
+            locale = argv[++i];
         } else if (arg == "--help" || arg == "-h") {
             print_usage(argv[0]);
             return 0;
         }
     }
 
-    return run_mic_mode(host, port);
+    return run_mic_mode(host, port, locale);
 }
