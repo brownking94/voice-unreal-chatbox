@@ -4,7 +4,7 @@ Real-time voice-to-text chat for Unreal Engine, powered by a local Whisper trans
 
 ## Overview
 
-This prototype captures a player's voice inside an Unreal Engine open world demo, sends the audio to a local transcription server built with whisper.cpp, and displays the transcribed text in an in-game chat widget. No cloud services, no translation for now — just English speech to English text, running entirely on-device.
+This prototype captures a player's voice inside an Unreal Engine open world demo, sends the audio to a local transcription server built with whisper.cpp, and displays the transcribed text in an in-game chat widget. No cloud services — just local speech-to-text supporting 99 languages, running entirely on-device.
 
 ## Architecture
 
@@ -57,7 +57,7 @@ The test client uses energy-based VAD to automatically detect speech and manage 
 3. **Trailing silence** — Speech stopped. Waits 700ms to confirm the speaker is done.
 4. **Send** — Chunk is sent to the server for transcription. Returns to idle.
 
-If the speaker talks for longer than 30 seconds, the chunk is force-sent and a new chunk begins recording immediately with no gap — this uses a double-buffer design where the callback writes to one buffer while the main loop drains the other.
+If the speaker talks for longer than 10 seconds, the chunk is force-sent and a new chunk begins recording immediately with no gap — this uses a double-buffer design where the callback writes to one buffer while the main loop drains the other.
 
 ## Multi-Client & Transcriber Pool
 
@@ -70,7 +70,7 @@ The server supports multiple simultaneous clients. Each client connection is han
 - Memory is fixed at startup — no per-client allocation
 - Each client is assigned a unique ID (Player1, Player2, etc.) that appears in logs and JSON responses
 
-| Workers | RAM (small.en) | Parallel transcriptions |
+| Workers | VRAM (small) | Parallel transcriptions |
 |---------|----------------|------------------------|
 | 1 | ~1.0 GB | Sequential only |
 | 2 (default) | ~2.0 GB | 2 concurrent |
@@ -156,11 +156,13 @@ JSON responses (speaker is assigned per client connection):
 
 ### Prerequisites
 
-- CMake 3.20+
-- C++17 compiler (clang, MSVC, or gcc)
-- macOS or Windows
-- **Optional:** [NVIDIA CUDA Toolkit 13.2+](https://developer.nvidia.com/cuda-downloads) for GPU-accelerated inference on Windows (enabled by default when detected). Tested with RTX 5070 and RTX 40-series
-- **NVIDIA driver**: Must support CUDA 13.2+. Run `nvidia-smi` to check — the "CUDA Version" in the top-right must be >= 13.2. Update to the latest Game Ready or Studio driver if needed
+- **Git** (to clone the repo)
+- **CMake 3.20+** ([cmake.org/download](https://cmake.org/download/))
+- **C++17 compiler**:
+  - **Windows**: Visual Studio 2022+ with "Desktop development with C++" workload
+  - **macOS**: Xcode command line tools (`xcode-select --install`)
+- **NVIDIA CUDA Toolkit 13.2+** (Windows only, optional): [developer.nvidia.com/cuda-downloads](https://developer.nvidia.com/cuda-downloads). Required for GPU-accelerated inference. Without it, falls back to CPU (too slow for real-time use)
+- **NVIDIA driver**: Must support CUDA 13.2+. Run `nvidia-smi` to check — the "CUDA Version" in the top-right must be >= 13.2. Update to the latest Game Ready or Studio driver if needed. Both Game Ready and Studio drivers work
 
 ### Build and Run
 
@@ -170,7 +172,7 @@ JSON responses (speaker is assigned per client connection):
 # Build everything (fetches whisper.cpp and miniaudio automatically)
 make build
 
-# Download the whisper model (~466 MB for small.en, only needed once)
+# Download the multilingual whisper model (~466 MB, only needed once)
 make model
 
 # Start the server (auto-downloads model if missing)
@@ -182,27 +184,39 @@ make run-client
 
 #### Windows (CMake + CUDA)
 
+From a fresh clone:
+
 ```bash
-# Configure — only needed once, or after editing CMakeLists.txt
-# CUDA is enabled by default when NVIDIA CUDA Toolkit is installed
+# 1. Verify CUDA is available (CUDA Version must be >= 13.2)
+nvidia-smi
+
+# 2. Clone the repo
+git clone https://github.com/brownking94/voice-unreal-chatbox.git
+cd voice-unreal-chatbox
+
+# 3. Configure — only needed once, or after editing CMakeLists.txt
+#    CUDA is enabled by default when NVIDIA CUDA Toolkit is installed
 cmake -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo
 
-# Build — first build takes 10-15 min (CUDA kernel compilation)
-# Subsequent builds are incremental and only recompile changed files
+# 4. Build — first build takes 10-15 min (compiling CUDA kernels)
+#    Subsequent builds are incremental and only recompile changed files
 cmake --build build --config RelWithDebInfo
 
-# Download the multilingual whisper model (only needed once)
+# 5. Download the multilingual whisper model (~466 MB, only needed once)
 mkdir models
 curl -L -o models/ggml-small.bin https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin
 
-# Start the server
+# 6. Start the server
 build\RelWithDebInfo\voice-server.exe -m models/ggml-small.bin -p 9090 -w 2 -f config/profanity.txt
 
-# In another terminal — start the mic client (English)
+# 7. In another terminal — start the mic client (English)
 build\RelWithDebInfo\test-client.exe -p 9090 -l en
 
 # Or start a Japanese client
 build\RelWithDebInfo\test-client.exe -p 9090 -l ja
+
+# 8. Verify GPU is being used (should show ~1500 MiB allocated)
+nvidia-smi
 ```
 
 To build without CUDA (CPU only), pass `-DENABLE_CUDA=OFF` during configure:
@@ -217,13 +231,22 @@ Shared libraries (ggml, whisper, ggml-cuda, etc.) are automatically copied next 
 
 ### Available Whisper Models
 
-| Model | Size | Quality | Inference (~5s clip, M4 Max) | Expected total latency | `MODEL_PATH` |
-|-------|------|---------|-------------------------------|----------------------|-------------|
-| `tiny.en` | ~75 MB | Basic | ~0.1s | ~1.5s | `models/ggml-tiny.en.bin` |
-| `base.en` | ~142 MB | Good | ~0.2s | ~1.5s | `models/ggml-base.en.bin` |
-| `small.en` | ~466 MB | Great (default) | ~0.5s | ~2s | `models/ggml-small.en.bin` |
-| `medium.en` | ~1.5 GB | Excellent | ~1-2s | ~2.5-3.5s | `models/ggml-medium.en.bin` |
-| `large-v3` | ~3 GB | Best (multilingual) | ~3-5s | ~4.5-6.5s | `models/ggml-large-v3.bin` |
+**Multilingual models** (99 languages — recommended):
+
+| Model | Size | Quality | Languages | `MODEL_PATH` |
+|-------|------|---------|-----------|-------------|
+| `tiny` | ~75 MB | Basic | 99 | `models/ggml-tiny.bin` |
+| `base` | ~142 MB | Good | 99 | `models/ggml-base.bin` |
+| **`small`** | **~466 MB** | **Great (default)** | **99** | **`models/ggml-small.bin`** |
+| `medium` | ~1.5 GB | Excellent | 99 | `models/ggml-medium.bin` |
+| `large-v3` | ~3 GB | Best | 99 | `models/ggml-large-v3.bin` |
+
+**English-only models** (slightly better WER for English):
+
+| Model | Size | Quality | `MODEL_PATH` |
+|-------|------|---------|-------------|
+| `small.en` | ~466 MB | Great | `models/ggml-small.en.bin` |
+| `medium.en` | ~1.5 GB | Excellent | `models/ggml-medium.en.bin` |
 
 **NVIDIA GPU estimates** (for a ~5s audio clip with CUDA):
 
@@ -238,9 +261,14 @@ Shared libraries (ggml, whisper, ggml-cuda, etc.) are automatically copied next 
 Total latency = VAD silence timeout (700ms) + inference + network (<1ms localhost) + filter (<1ms).
 Inference time scales roughly linearly with audio length. Expect 2-3x slower on CPU-only compared to GPU.
 
+Download any model with:
+```bash
+curl -L -o models/<model_file> https://huggingface.co/ggerganov/whisper.cpp/resolve/main/<model_file>
+```
+
 Override the default model:
 ```bash
-make run-server MODEL_PATH=models/ggml-small.en.bin
+make run-server MODEL_PATH=models/ggml-medium.bin
 ```
 
 ### Project Structure
