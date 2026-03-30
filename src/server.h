@@ -3,6 +3,8 @@
 #include <atomic>
 #include <cstdint>
 #include <functional>
+#include <map>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -28,6 +30,11 @@
 // Must be thread-safe — called from multiple client threads concurrently.
 using AudioHandler = std::function<std::string(int client_id, const std::string& locale, const std::vector<uint8_t>& audio_data)>;
 
+struct ClientInfo {
+    socket_t    sock;
+    std::string locale;
+};
+
 class Server {
 public:
     Server(uint16_t port, AudioHandler handler);
@@ -39,6 +46,9 @@ public:
 
 private:
     void handle_client(socket_t client_sock, int client_id);
+    void register_client(int client_id, socket_t sock, const std::string& locale);
+    void unregister_client(int client_id);
+    void broadcast(int sender_id, const std::string& message);
     bool recv_all(socket_t sock, void* buf, size_t len);
     bool send_all(socket_t sock, const void* buf, size_t len);
 
@@ -47,4 +57,8 @@ private:
     socket_t          listen_sock_ = SOCKET_INVALID;
     std::atomic<bool> running_{false};
     std::atomic<int>  client_count_{0};
+
+    // Client registry: client_id → ClientInfo (socket + locale)
+    std::mutex                  clients_mtx_;
+    std::map<int, ClientInfo>   clients_;
 };

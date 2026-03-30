@@ -20,10 +20,12 @@ static std::string json_escape(const std::string& s) {
 }
 
 std::string make_response(const std::string& speaker,
+                          const std::string& locale,
                           const std::string& original,
                           const std::vector<std::string>& flagged_words,
                           const std::string& redacted) {
     std::string json = "{\"speaker\":\"" + json_escape(speaker) +
+                       "\",\"locale\":\"" + json_escape(locale) +
                        "\",\"original\":\"" + json_escape(original) +
                        "\",\"flagged_words\":[";
 

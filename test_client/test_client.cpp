@@ -229,6 +229,70 @@ static void mic_callback(ma_device* device, void* /*output*/, const void* input,
     }
 }
 
+// Listen-only mode: register with the server, then just receive broadcasts
+static int run_listen_mode(const std::string& host, uint16_t port, const std::string& locale) {
+    platform_init();
+
+    socket_t sock = socket(AF_INET, SOCK_STREAM, 0);
+    if (sock == SOCKET_INVALID) {
+        std::cerr << "Failed to create socket" << std::endl;
+        return 1;
+    }
+
+    sockaddr_in addr{};
+    addr.sin_family = AF_INET;
+    addr.sin_port   = htons(port);
+    inet_pton(AF_INET, host.c_str(), &addr.sin_addr);
+
+    std::cout << "Connecting to " << host << ":" << port << "..." << std::endl;
+
+    if (connect(sock, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) < 0) {
+        std::cerr << "Failed to connect to server" << std::endl;
+        CLOSE_SOCKET(sock);
+        platform_cleanup();
+        return 1;
+    }
+
+    std::cout << "Connected (listen-only). Locale: " << locale << std::endl;
+
+    // Send registration: locale + zero-length audio
+    uint8_t loc_len = static_cast<uint8_t>(locale.size());
+    uint8_t zero_audio[4] = {0, 0, 0, 0};
+    if (!send_all(sock, &loc_len, 1) || !send_all(sock, locale.data(), loc_len) ||
+        !send_all(sock, zero_audio, 4)) {
+        std::cerr << "Failed to register with server" << std::endl;
+        CLOSE_SOCKET(sock);
+        platform_cleanup();
+        return 1;
+    }
+
+    std::cout << "Listening for broadcasts... (Ctrl+C to quit)" << std::endl;
+    std::cout << std::endl;
+
+    while (true) {
+        // Read broadcast: [4-byte length][JSON]
+        uint8_t resp_hdr[4];
+        if (!recv_all(sock, resp_hdr, 4)) {
+            std::cerr << "Server disconnected" << std::endl;
+            break;
+        }
+
+        uint32_t resp_len = read_u32_be(resp_hdr);
+        std::vector<char> resp_buf(resp_len);
+        if (!recv_all(sock, resp_buf.data(), resp_len)) {
+            std::cerr << "Failed to receive broadcast" << std::endl;
+            break;
+        }
+
+        std::string response(resp_buf.begin(), resp_buf.end());
+        std::cout << ">> " << response << std::endl;
+    }
+
+    CLOSE_SOCKET(sock);
+    platform_cleanup();
+    return 0;
+}
+
 static int run_mic_mode(const std::string& host, uint16_t port, const std::string& locale) {
     platform_init();
 
@@ -325,18 +389,20 @@ static int run_mic_mode(const std::string& host, uint16_t port, const std::strin
 // ── Main ────────────────────────────────────────────────────────────────────
 
 static void print_usage(const char* prog) {
-    std::cerr << "Usage: " << prog << " [-s <host>] [-p <port>] [-l <locale>]" << std::endl;
+    std::cerr << "Usage: " << prog << " [-s <host>] [-p <port>] [-l <locale>] [--listen]" << std::endl;
     std::cerr << std::endl;
     std::cerr << "Options:" << std::endl;
     std::cerr << "  -s <host>    Server host (default: 127.0.0.1)" << std::endl;
     std::cerr << "  -p <port>    Server port (default: 9090)" << std::endl;
     std::cerr << "  -l <locale>  Language code for STT, e.g. en, ja, auto (default: en)" << std::endl;
+    std::cerr << "  --listen     Listen-only mode: receive broadcasts without capturing mic" << std::endl;
 }
 
 int main(int argc, char* argv[]) {
     std::string host = "127.0.0.1";
     uint16_t port = 9090;
     std::string locale = "en";
+    bool listen_only = false;
 
     for (int i = 1; i < argc; i++) {
         std::string arg = argv[i];
@@ -346,11 +412,16 @@ int main(int argc, char* argv[]) {
             port = static_cast<uint16_t>(std::atoi(argv[++i]));
         } else if (arg == "-l" && i + 1 < argc) {
             locale = argv[++i];
+        } else if (arg == "--listen") {
+            listen_only = true;
         } else if (arg == "--help" || arg == "-h") {
             print_usage(argv[0]);
             return 0;
         }
     }
 
+    if (listen_only) {
+        return run_listen_mode(host, port, locale);
+    }
     return run_mic_mode(host, port, locale);
 }

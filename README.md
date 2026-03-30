@@ -37,7 +37,7 @@ A lightweight local server built with standard C++ and whisper.cpp. It has no de
 
 ### Test Client (Standalone C++)
 
-A standalone client for testing the server without Unreal Engine. Captures live audio from the microphone with automatic voice activity detection (VAD). Detects when you start and stop speaking, then sends the audio chunk to the server automatically.
+A standalone client for testing the server without Unreal Engine. Captures live audio from the microphone with automatic voice activity detection (VAD). Detects when you start and stop speaking, then sends the audio chunk to the server automatically. Supports a `--listen` flag for listen-only mode (receives broadcasts without capturing mic).
 
 ### Unreal Engine Client (Unreal C++ / Blueprints) — not yet implemented
 
@@ -145,10 +145,10 @@ Server → Client:  [4-byte big-endian uint32 length][JSON response]
 
 The locale is a whisper language code (e.g. `en`, `ja`, `ko`, `zh`, `auto`). It is sent with every audio chunk, allowing the server to remain completely stateless — no per-client session tracking needed.
 
-JSON responses (speaker is assigned per client connection):
+JSON responses (speaker is assigned per client connection, locale is the sender's language):
 ```json
-{"speaker":"Player1","original":" anyone see that dragon?","flagged_words":[],"redacted":" anyone see that dragon?"}
-{"speaker":"Player2","original":" what the fuck is that","flagged_words":["fuck"],"redacted":" what the **** is that"}
+{"speaker":"Player1","locale":"en","original":" anyone see that dragon?","flagged_words":[],"redacted":" anyone see that dragon?"}
+{"speaker":"Player2","locale":"en","original":" what the fuck is that","flagged_words":["fuck"],"redacted":" what the **** is that"}
 {"error":"No speech detected"}
 ```
 
@@ -212,12 +212,26 @@ build\RelWithDebInfo\voice-server.exe -m models/ggml-small.bin -p 9090 -w 2 -f c
 # 7. In another terminal — start the mic client (English)
 build\RelWithDebInfo\test-client.exe -p 9090 -l en
 
-# Or start a Japanese client
-build\RelWithDebInfo\test-client.exe -p 9090 -l ja
-
 # 8. Verify GPU is being used (should show ~1500 MiB allocated)
 nvidia-smi
 ```
+
+#### Testing broadcast with multiple clients
+
+The server broadcasts transcriptions to all connected clients. To test with one mic:
+
+```bash
+# Terminal 1 — server
+build\RelWithDebInfo\voice-server.exe -m models/ggml-small.bin -p 9090 -w 2 -f config/profanity.txt
+
+# Terminal 2 — speaking client (captures mic, sends audio)
+build\RelWithDebInfo\test-client.exe -p 9090 -l en
+
+# Terminal 3 — listen-only client (receives broadcasts, no mic capture)
+build\RelWithDebInfo\test-client.exe -p 9090 -l ja --listen
+```
+
+When you speak in Terminal 2, both Terminal 2 and Terminal 3 display the transcription. The listen-only client registers its locale with the server (for future translation routing) but never captures audio.
 
 To build without CUDA (CPU only), pass `-DENABLE_CUDA=OFF` during configure:
 ```bash

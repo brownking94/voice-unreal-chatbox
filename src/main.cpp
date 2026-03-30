@@ -70,7 +70,7 @@ int main(int argc, char* argv[]) {
         }
         std::cout << std::endl;
 
-        return protocol::make_response(speaker, fr.original, fr.flagged_words, fr.redacted);
+        return protocol::make_response(speaker, locale, fr.original, fr.flagged_words, fr.redacted);
     });
 
     std::cout << "[main] Starting voice server on port " << port

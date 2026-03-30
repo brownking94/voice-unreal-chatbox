@@ -7,6 +7,7 @@ namespace protocol {
 
 // Build a JSON success response with profanity filter results
 std::string make_response(const std::string& speaker,
+                          const std::string& locale,
                           const std::string& original,
                           const std::vector<std::string>& flagged_words,
                           const std::string& redacted);

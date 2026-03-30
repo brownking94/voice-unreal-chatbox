@@ -114,7 +114,38 @@ void Server::stop() {
     }
 }
 
+void Server::register_client(int client_id, socket_t sock, const std::string& locale) {
+    std::lock_guard<std::mutex> lock(clients_mtx_);
+    clients_[client_id] = {sock, locale};
+    std::cout << "[server] Registered Client #" << client_id << " (locale: " << locale << ")" << std::endl;
+}
+
+void Server::unregister_client(int client_id) {
+    std::lock_guard<std::mutex> lock(clients_mtx_);
+    clients_.erase(client_id);
+    std::cout << "[server] Unregistered Client #" << client_id << std::endl;
+}
+
+void Server::broadcast(int sender_id, const std::string& message) {
+    uint32_t msg_len = static_cast<uint32_t>(message.size());
+    uint8_t hdr[4];
+    write_u32_be(hdr, msg_len);
+
+    std::lock_guard<std::mutex> lock(clients_mtx_);
+    for (auto& [id, info] : clients_) {
+        if (id == sender_id) continue;  // Don't echo back to sender
+        // Best-effort send — if a client is slow, skip it
+        if (!send_all(info.sock, hdr, 4) ||
+            !send_all(info.sock, message.data(), msg_len)) {
+            std::cerr << "[server] Failed to broadcast to Client #" << id << std::endl;
+        }
+    }
+}
+
 void Server::handle_client(socket_t client_sock, int client_id) {
+    // Register with a default locale; updated with each message
+    register_client(client_id, client_sock, "en");
+
     while (running_) {
         // Read 1-byte locale length + locale string
         uint8_t locale_len;
@@ -131,6 +162,12 @@ void Server::handle_client(socket_t client_sock, int client_id) {
         }
         std::string locale(locale_buf.begin(), locale_buf.end());
 
+        // Update locale in registry (in case client changes language mid-session)
+        {
+            std::lock_guard<std::mutex> lock(clients_mtx_);
+            clients_[client_id].locale = locale;
+        }
+
         // Read 4-byte audio length header
         uint8_t len_buf[4];
         if (!recv_all(client_sock, len_buf, 4)) {
@@ -138,6 +175,12 @@ void Server::handle_client(socket_t client_sock, int client_id) {
         }
 
         uint32_t payload_len = read_u32_be(len_buf);
+
+        // Zero-length audio = registration only (listen-only client)
+        if (payload_len == 0) {
+            std::cout << "[server] Client #" << client_id << " (" << locale << ") registered as listener" << std::endl;
+            continue;
+        }
 
         // Sanity check: reject payloads > 50 MB
         if (payload_len > 50 * 1024 * 1024) {
@@ -157,7 +200,7 @@ void Server::handle_client(socket_t client_sock, int client_id) {
         // Run transcription via the pool (thread-safe, borrows a model instance)
         std::string response = handler_(client_id, locale, audio);
 
-        // Send response: [4-byte length][JSON]
+        // Send response back to sender: [4-byte length][JSON]
         uint32_t resp_len = static_cast<uint32_t>(response.size());
         uint8_t resp_hdr[4];
         write_u32_be(resp_hdr, resp_len);
@@ -167,7 +210,12 @@ void Server::handle_client(socket_t client_sock, int client_id) {
             std::cerr << "[server] Failed to send response" << std::endl;
             break;
         }
+
+        // Broadcast to all other connected clients
+        broadcast(client_id, response);
     }
+
+    unregister_client(client_id);
 }
 
 bool Server::recv_all(socket_t sock, void* buf, size_t len) {
