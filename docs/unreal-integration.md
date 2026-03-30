@@ -6,6 +6,7 @@ This document contains the complete Unreal Engine C++ integration for the voice-
 
 The integration adds voice chat to any Unreal Engine project with:
 - **Push-to-talk** via Ctrl+V
+- **Language switching** via Ctrl+Shift+V + Left/Right arrows (8 languages: en, ja, ko, zh, es, hi, fr, de)
 - **TCP connection** to the whisper server on port 9090
 - **Stateless locale protocol** — sends language code with every audio message
 - **Broadcast support** — receives transcriptions from all connected clients
@@ -458,7 +459,7 @@ class UVoiceChatWidget;
 /**
  * Actor component that captures mic audio on push-to-talk (Ctrl+V),
  * sends it to the Whisper transcription server, and displays the result
- * in an in-game chat widget.
+ * in an in-game chat widget. Ctrl+Shift+V + Left/Right arrows to switch language.
  */
 UCLASS(ClassGroup=(VoiceChat), meta=(BlueprintSpawnableComponent))
 class UVoiceChatComponent : public UActorComponent
@@ -475,6 +476,10 @@ public:
 	/** Server port. */
 	UPROPERTY(EditAnywhere, Category = "Voice Chat")
 	int32 ServerPort = 9090;
+
+	/** Supported languages for STT. Ctrl+Shift+V cycles through these. */
+	UPROPERTY(EditAnywhere, Category = "Voice Chat")
+	TArray<FString> SupportedLocales = { TEXT("en"), TEXT("ja"), TEXT("ko"), TEXT("zh"), TEXT("es"), TEXT("hi"), TEXT("fr"), TEXT("de") };
 
 protected:
 	virtual void BeginPlay() override;
@@ -499,6 +504,16 @@ private:
 
 	bool bIsRecording = false;
 	bool bKeyHeld = false;
+
+	/** Whether we're in language selection mode (Ctrl+Shift+V held). */
+	bool bLangSelectMode = false;
+
+	/** Whether left/right arrow was pressed (debounce). */
+	bool bArrowPressed = false;
+
+	/** Current index into SupportedLocales. */
+	int32 CurrentLocaleIndex = 0;
+
 	TArray<float> RecordingBuffer;
 	int32 CaptureChannels = 1;
 	int32 CaptureSampleRate = 48000;
@@ -605,8 +620,60 @@ void UVoiceChatComponent::TickComponent(float DeltaTime, ELevelTick TickType, FA
 	if (!PC) return;
 
 	bool bCtrlHeld = PC->IsInputKeyDown(EKeys::LeftControl) || PC->IsInputKeyDown(EKeys::RightControl);
+	bool bShiftHeld = PC->IsInputKeyDown(EKeys::LeftShift) || PC->IsInputKeyDown(EKeys::RightShift);
 	bool bVHeld = PC->IsInputKeyDown(EKeys::V);
-	bool bPushToTalk = bCtrlHeld && bVHeld;
+
+	// Ctrl+Shift+V = enter language selection mode, use arrow keys to pick
+	bool bLangSelectActive = bCtrlHeld && bShiftHeld && bVHeld;
+	if (bLangSelectActive && !bLangSelectMode)
+	{
+		bLangSelectMode = true;
+		if (ChatWidget && SupportedLocales.Num() > 0)
+		{
+			ChatWidget->AddMessage(TEXT("System"), FString::Printf(TEXT("Language select: %s  (Left/Right to change, release to confirm)"), *SupportedLocales[CurrentLocaleIndex]));
+		}
+	}
+
+	if (bLangSelectActive && SupportedLocales.Num() > 1)
+	{
+		bool bRightHeld = PC->IsInputKeyDown(EKeys::Right);
+		bool bLeftHeld = PC->IsInputKeyDown(EKeys::Left);
+
+		if ((bRightHeld || bLeftHeld) && !bArrowPressed)
+		{
+			bArrowPressed = true;
+			if (bRightHeld)
+			{
+				CurrentLocaleIndex = (CurrentLocaleIndex + 1) % SupportedLocales.Num();
+			}
+			else
+			{
+				CurrentLocaleIndex = (CurrentLocaleIndex - 1 + SupportedLocales.Num()) % SupportedLocales.Num();
+			}
+			FString NewLocale = SupportedLocales[CurrentLocaleIndex];
+			if (WhisperClient)
+			{
+				WhisperClient->Locale = NewLocale;
+			}
+			UE_LOG(LogTemp, Log, TEXT("VoiceChat: Language switched to %s"), *NewLocale);
+			if (ChatWidget)
+			{
+				ChatWidget->AddMessage(TEXT("System"), FString::Printf(TEXT("Language: %s"), *NewLocale));
+			}
+		}
+		else if (!bRightHeld && !bLeftHeld)
+		{
+			bArrowPressed = false;
+		}
+	}
+
+	if (!bLangSelectActive && bLangSelectMode)
+	{
+		bLangSelectMode = false;
+	}
+
+	// Ctrl+V (without Shift) = push to talk
+	bool bPushToTalk = bCtrlHeld && bVHeld && !bShiftHeld;
 
 	if (bPushToTalk && !bKeyHeld) { bKeyHeld = true; StartRecording(); }
 	else if (!bPushToTalk && bKeyHeld) { bKeyHeld = false; StopRecording(); }
