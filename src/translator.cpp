@@ -76,8 +76,10 @@ std::string Translator::translate(const std::string& text,
 
         // Translate
         ctranslate2::TranslationOptions options;
-        options.beam_size = 4;
-        options.max_decoding_length = 256;
+        options.beam_size = 5;
+        options.max_decoding_length = static_cast<size_t>(tokens.size() * 3);
+        options.repetition_penalty = 1.5f;
+        options.no_repeat_ngram_size = 3;
 
         std::vector<std::vector<std::string>> batch_input = {tokens};
         std::vector<std::vector<std::string>> batch_target = {target_prefix};

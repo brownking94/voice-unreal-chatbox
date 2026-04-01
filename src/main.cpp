@@ -9,6 +9,10 @@
 #include <cstdlib>
 #include <memory>
 
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
 static void print_usage(const char* prog) {
     std::cerr << "Usage: " << prog << " -m <model_path> [-p <port>] [-w <workers>] [-f <filter_path>] [-t <translation_model_dir>] [-s <sp_model_path>]" << std::endl;
     std::cerr << std::endl;
@@ -43,6 +47,11 @@ static std::string replace_json_field(const std::string& json, const std::string
 }
 
 int main(int argc, char* argv[]) {
+#ifdef _WIN32
+    // Enable UTF-8 console output for Hindi, Japanese, etc.
+    SetConsoleOutputCP(CP_UTF8);
+    SetConsoleCP(CP_UTF8);
+#endif
     std::string model_path = "models/ggml-small.bin";
     std::string filter_path = "config/profanity.txt";
     std::string translation_model_dir = "models/nllb-200-distilled-600M";
@@ -81,7 +90,7 @@ int main(int argc, char* argv[]) {
     // Optionally load the translation model
     std::unique_ptr<Translator> translator;
     if (!translation_model_dir.empty() && !sp_model_path.empty()) {
-        translator = std::make_unique<Translator>(translation_model_dir, sp_model_path, "cuda");
+        translator = std::make_unique<Translator>(translation_model_dir, sp_model_path, "cpu");
         if (!translator->is_loaded()) {
             std::cerr << "[main] Translation model failed to load, continuing without translation" << std::endl;
             translator.reset();

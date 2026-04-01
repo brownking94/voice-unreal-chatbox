@@ -263,13 +263,14 @@ cmake -B build -DENABLE_TRANSLATION=OFF -DCMAKE_BUILD_TYPE=RelWithDebInfo
 
 > **Note:** Avoid deleting the `build/` directory unless necessary — CUDA kernel compilation is slow. Incremental builds only recompile what changed.
 
-### VRAM Budget (RTX 5070 8 GB)
+### Resource Budget (RTX 5070 8 GB)
 
-| Component | VRAM |
-|-----------|------|
-| Whisper small (x2 workers) | ~2.0 GB |
-| NLLB-200-distilled-600M | ~0.6 GB |
-| **Total** | **~2.6 GB** |
+| Component | VRAM (GPU) | RAM (CPU) |
+|-----------|------------|-----------|
+| Whisper small (x2 workers) | ~2.0 GB | — |
+| NLLB-200 translation | 0 GB (runs on CPU) | ~1.2 GB |
+| **Total server** | **~2.0 GB** | **~1.2 GB** |
+| Unreal Engine game | 5-6 GB free | — |
 
 ### Project Structure
 
@@ -300,10 +301,33 @@ cmake -B build -DENABLE_TRANSLATION=OFF -DCMAKE_BUILD_TYPE=RelWithDebInfo
     └── nllb-200-distilled-600M/ # NLLB translation model
 ```
 
+## GPU/CPU Split
+
+The server splits AI workloads between GPU and CPU to leave VRAM free for the game:
+
+| Task | Runs on | Why |
+|------|---------|-----|
+| **Whisper STT** | GPU (CUDA) | Audio is large — millions of float ops per chunk. GPU is 5-10x faster than CPU here |
+| **NLLB Translation** | CPU | Input is just ~10-20 text tokens. CPU adds ~100-200ms latency, barely noticeable in chat |
+| **Profanity filter** | CPU | String matching, trivial |
+
+This means the game gets most of the GPU VRAM:
+
+| Component | VRAM | RAM |
+|-----------|------|-----|
+| Whisper small (2 workers) | ~2.0 GB | — |
+| NLLB-200 translation | 0 GB | ~1.2 GB |
+| **Total server** | **~2.0 GB** | **~1.2 GB** |
+| Unreal Engine game | 5-6 GB free | — |
+
+Running translation on GPU would add ~0.6-1.5 GB VRAM depending on model size, leaving less room for the game. The CPU path trades ~150ms of chat latency for that VRAM — players won't notice the delay on text appearing in chat, but they would notice frame drops from VRAM pressure.
+
+For a shipped product, the typical architecture is a dedicated GPU server running STT + translation, with game clients sending audio over the network. This prototype runs both on the same machine, which is why the CPU/GPU split matters.
+
 ## GPU Notes
 
 - **macOS**: Uses Metal/Accelerate automatically. Apple Silicon's unified memory and AMX coprocessor make CPU-only inference fast enough for real-time use even without explicit GPU offload.
-- **Windows**: Requires NVIDIA CUDA. Without GPU acceleration, x86 CPU inference is too slow for real-time use (~2x realtime for `small.en`).
+- **Windows**: Requires NVIDIA CUDA. Without GPU acceleration, x86 CPU inference is too slow for real-time STT (~2x realtime for `small.en`).
 - **Consumer Blackwell GPUs** (RTX 5070/5080/5090): The build targets sm_89 (Ada Lovelace) instead of sm_120a. This is because ggml's CUDA backend enables MXFP4 block-scale MMA instructions on sm_120a that only work on data-center Blackwell chips (B200), not consumer cards. sm_89 is forward-compatible and runs correctly on all RTX 30/40/50 series GPUs.
 - **Driver version matters**: The NVIDIA driver must support the CUDA version the code was compiled against (13.2). If the driver is too old, the CUDA backend will silently fail and inference falls back to CPU with no error message. Update to the latest Game Ready driver to fix this.
 
@@ -312,7 +336,7 @@ cmake -B build -DENABLE_TRANSLATION=OFF -DCMAKE_BUILD_TYPE=RelWithDebInfo
 Run `nvidia-smi` after starting the server:
 
 ```
-|   0  NVIDIA GeForce RTX 5070 ...  |   2600MiB /   8151MiB |      0%      Default |
+|   0  NVIDIA GeForce RTX 5070 ...  |   1500MiB /   8151MiB |      0%      Default |
 ```
 
 If GPU memory shows **0 MiB** with the server running, CUDA is not working. Common causes:
