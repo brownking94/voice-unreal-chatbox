@@ -6,45 +6,63 @@ This document contains the complete Unreal Engine C++ integration for the voice-
 
 The integration adds voice chat to any Unreal Engine project with:
 - **Push-to-talk** via Ctrl+V
-- **Language switching** via Ctrl+Shift+V + Left/Right arrows (8 languages: en, ja, ko, zh, es, hi, fr, de)
-- **TCP connection** to the whisper server on port 9090
+- **Language switching** via Ctrl+Shift+V — GTA V-style radial wheel with 20 languages
+- **TCP connection** to the voice server on port 9090
 - **Stateless locale protocol** — sends language code with every audio message
 - **Broadcast support** — receives transcriptions from all connected clients
-- **In-game chat widget** — semi-transparent overlay at bottom-left of screen
+- **In-game chat widget** — semi-transparent Slate overlay at bottom-left
+- **UTF-8 support** — composite font with CJK, Devanagari, Arabic, Thai fallbacks
+
+The server handles all translation logic. It auto-detects the spoken language, runs Whisper transcribe + translate, and sends each client a simple `{"speaker","locale","text"}` message with the appropriate text already chosen (original for same-language, English for cross-language). The client just displays what it receives.
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────┐
-│  Unreal Engine                                      │
-│                                                     │
-│  VoiceDemoPlayerController                          │
-│    └── VoiceChatComponent                           │
-│          ├── AudioCapture (mic input)               │
-│          ├── WhisperClient (TCP to server)           │
-│          │     ├── DoSendAudio (on Ctrl+V release)  │
-│          │     └── ReceiveLoop (background thread)  │
-│          └── VoiceChatWidget (UI overlay)            │
-└─────────────────────────────────────────────────────┘
-         │                          ▲
-         │ [locale][audio]          │ [JSON broadcast]
-         ▼                          │
-┌─────────────────────────────────────────────────────┐
-│  Whisper Server (voice-unreal-chatbox)              │
-│  - STT via whisper.cpp                              │
-│  - Profanity filter                                 │
-│  - Broadcast to all clients                         │
-└─────────────────────────────────────────────────────┘
++-----------------------------------------------------+
+|  Unreal Engine                                       |
+|                                                      |
+|  VoiceDemoPlayerController                           |
+|    +-- VoiceChatComponent                            |
+|          +-- AudioCapture (mic input)                |
+|          +-- WhisperClient (TCP to server)            |
+|          |     +-- DoSendAudio (on Ctrl+V release)   |
+|          |     +-- SendLocaleUpdate (on lang change) |
+|          |     +-- ReceiveLoop (background thread)   |
+|          +-- VoiceChatWidget (UI overlay)             |
+|          |     +-- SLanguageWheel (radial selector)  |
++-----------------------------------------------------+
+         |                          ^
+         | [locale][audio]          | [JSON: speaker, locale, text]
+         v                          |
++-----------------------------------------------------+
+|  Whisper Server (voice-unreal-chatbox)               |
+|  - Auto language detection                           |
+|  - Whisper transcribe + translate                    |
+|  - Profanity filter                                  |
+|  - Per-listener text routing                         |
++-----------------------------------------------------+
 ```
 
 ## Wire Protocol
 
 ```
-Client → Server:  [1-byte locale length][locale string][4-byte BE audio length][raw 16-bit PCM, 16kHz mono]
-Server → Client:  [4-byte BE length][JSON response]
+Client -> Server:  [1-byte locale length][locale string][4-byte BE audio length][raw 16-bit PCM, 16kHz mono]
+Server -> Client:  [4-byte BE length][JSON response]
 ```
 
-On connect, the client sends a registration message (locale + zero-length audio) so the server adds it to the broadcast list immediately.
+On connect, the client sends a registration message (locale + zero-length audio) so the server adds it to the broadcast list immediately. A locale update (via the language wheel) sends another registration.
+
+### JSON Response
+
+The server sends a simple message with the appropriate text already chosen per listener:
+
+```json
+{"speaker":"Player1","locale":"hi","text":"There is someone behind you."}
+```
+
+- `speaker` — player ID
+- `locale` — detected language of the speech
+- `text` — display text (original for same-language listeners, English translation for others)
 
 ## File Structure
 
@@ -52,15 +70,17 @@ All voice chat files go in `Source/<ProjectName>/VoiceChat/`:
 
 ```
 Source/<ProjectName>/
-├── VoiceChat/
-│   ├── WhisperClient.h          # TCP client with background receive loop
-│   ├── WhisperClient.cpp
-│   ├── VoiceChatComponent.h     # Actor component: mic capture + push-to-talk
-│   ├── VoiceChatComponent.cpp
-│   ├── VoiceChatWidget.h        # In-game chat overlay widget
-│   └── VoiceChatWidget.cpp
-├── <ProjectName>PlayerController.h   # Modified to add VoiceChatComponent
-└── <ProjectName>PlayerController.cpp
++-- VoiceChat/
+|   +-- WhisperClient.h          # TCP client with background receive loop
+|   +-- WhisperClient.cpp
+|   +-- VoiceChatComponent.h     # Actor component: mic capture + push-to-talk
+|   +-- VoiceChatComponent.cpp
+|   +-- VoiceChatWidget.h        # In-game chat overlay widget
+|   +-- VoiceChatWidget.cpp
+|   +-- SLanguageWheel.h         # GTA V-style radial language selector
+|   +-- SLanguageWheel.cpp
++-- <ProjectName>PlayerController.h   # Modified to add VoiceChatComponent
++-- <ProjectName>PlayerController.cpp
 ```
 
 ## Required Module Dependencies
@@ -98,7 +118,7 @@ Also add to `PublicIncludePaths`:
 
 class FSocket;
 
-DECLARE_DELEGATE_ThreeParams(FOnTranscriptionReceived, const FString& /*Speaker*/, const FString& /*Text*/, const FString& /*Translated*/);
+DECLARE_DELEGATE_TwoParams(FOnTranscriptionReceived, const FString& /*Speaker*/, const FString& /*Text*/);
 DECLARE_DELEGATE_OneParam(FOnWhisperError, const FString& /*ErrorMessage*/);
 
 /**
@@ -134,6 +154,9 @@ public:
 	 * Sends on a background thread; result arrives via OnTranscriptionReceived.
 	 */
 	void SendAudio(const TArray<uint8>& PCMData);
+
+	/** Re-send registration (locale + zero-length audio) to update the server's record of this client's language. */
+	void SendLocaleUpdate();
 
 	/** Called on the game thread when a transcription is received (own or broadcast). */
 	FOnTranscriptionReceived OnTranscriptionReceived;
@@ -284,6 +307,26 @@ void UWhisperClient::SendAudio(const TArray<uint8>& PCMData)
 	});
 }
 
+void UWhisperClient::SendLocaleUpdate()
+{
+	if (!IsConnected()) return;
+
+	AsyncTask(ENamedThreads::AnyBackgroundThreadNormalTask, [this]()
+	{
+		FScopeLock Lock(&SendMutex);
+		if (!Socket) return;
+
+		FTCHARToUTF8 LocaleUtf8(*Locale);
+		uint8 LocaleLen = static_cast<uint8>(LocaleUtf8.Length());
+		uint8 ZeroAudio[4] = {0, 0, 0, 0};
+		SendAll(&LocaleLen, 1);
+		SendAll(reinterpret_cast<const uint8*>(LocaleUtf8.Get()), LocaleLen);
+		SendAll(ZeroAudio, 4);
+
+		UE_LOG(LogTemp, Log, TEXT("WhisperClient: Sent locale update to server: %s"), *Locale);
+	});
+}
+
 void UWhisperClient::BeginDestroy()
 {
 	Disconnect();
@@ -402,7 +445,9 @@ void UWhisperClient::ReceiveLoop()
 			break;
 		}
 
-		FString JsonString = FString(RespLen, reinterpret_cast<const char*>(RespBuf.GetData()));
+		// Server sends UTF-8 JSON — must convert properly for CJK/non-ASCII text
+		FUTF8ToTCHAR Converter(reinterpret_cast<const ANSICHAR*>(RespBuf.GetData()), RespLen);
+		FString JsonString(Converter.Length(), Converter.Get());
 		HandleResponse(JsonString);
 	}
 
@@ -434,13 +479,11 @@ void UWhisperClient::HandleResponse(const FString& JsonString)
 	}
 
 	FString Speaker = JsonObject->GetStringField(TEXT("speaker"));
-	FString Redacted = JsonObject->GetStringField(TEXT("redacted"));
-	FString Translated;
-	JsonObject->TryGetStringField(TEXT("translated"), Translated);
+	FString Text = JsonObject->GetStringField(TEXT("text"));
 
-	AsyncTask(ENamedThreads::GameThread, [this, Speaker, Redacted, Translated]()
+	AsyncTask(ENamedThreads::GameThread, [this, Speaker, Text]()
 	{
-		OnTranscriptionReceived.ExecuteIfBound(Speaker, Redacted, Translated);
+		OnTranscriptionReceived.ExecuteIfBound(Speaker, Text);
 	});
 }
 ```
@@ -461,7 +504,7 @@ class UVoiceChatWidget;
 /**
  * Actor component that captures mic audio on push-to-talk (Ctrl+V),
  * sends it to the Whisper transcription server, and displays the result
- * in an in-game chat widget. Ctrl+Shift+V + Left/Right arrows to switch language.
+ * in an in-game chat widget. Ctrl+Shift+V opens a radial language wheel.
  */
 UCLASS(ClassGroup=(VoiceChat), meta=(BlueprintSpawnableComponent))
 class UVoiceChatComponent : public UActorComponent
@@ -479,9 +522,14 @@ public:
 	UPROPERTY(EditAnywhere, Category = "Voice Chat")
 	int32 ServerPort = 9090;
 
-	/** Supported languages for STT. Ctrl+Shift+V cycles through these. */
+	/** Supported languages. Client tells the server which language to transcribe. */
 	UPROPERTY(EditAnywhere, Category = "Voice Chat")
-	TArray<FString> SupportedLocales = { TEXT("en"), TEXT("ja"), TEXT("ko"), TEXT("zh"), TEXT("es"), TEXT("hi"), TEXT("fr"), TEXT("de") };
+	TArray<FString> SupportedLocales = {
+		TEXT("en"), TEXT("zh"), TEXT("es"), TEXT("hi"), TEXT("ar"),
+		TEXT("pt"), TEXT("ja"), TEXT("ko"), TEXT("fr"), TEXT("de"),
+		TEXT("ru"), TEXT("it"), TEXT("nl"), TEXT("pl"), TEXT("tr"),
+		TEXT("sv"), TEXT("th"), TEXT("vi"), TEXT("id"), TEXT("cs")
+	};
 
 protected:
 	virtual void BeginPlay() override;
@@ -491,8 +539,10 @@ protected:
 private:
 	void StartRecording();
 	void StopRecording();
-	void OnTranscriptionReceived(const FString& Speaker, const FString& Text, const FString& Translated);
+	void OnTranscriptionReceived(const FString& Speaker, const FString& Text);
 	void OnError(const FString& ErrorMessage);
+	void OnWheelConfirmed(int32 SelectedIndex);
+	void OnWheelDismissed();
 	TArray<uint8> ConvertToServerFormat(const TArray<float>& FloatSamples, int32 NumChannels, int32 SourceSampleRate);
 
 	UPROPERTY()
@@ -507,11 +557,11 @@ private:
 	bool bIsRecording = false;
 	bool bKeyHeld = false;
 
-	/** Whether we're in language selection mode (Ctrl+Shift+V held). */
-	bool bLangSelectMode = false;
+	/** Whether the language wheel is currently open. */
+	bool bWheelOpen = false;
 
-	/** Whether left/right arrow was pressed (debounce). */
-	bool bArrowPressed = false;
+	/** Debounce for Ctrl+Shift+V press. */
+	bool bLangKeyHeld = false;
 
 	/** Current index into SupportedLocales. */
 	int32 CurrentLocaleIndex = 0;
@@ -554,6 +604,8 @@ void UVoiceChatComponent::BeginPlay()
 		if (ChatWidget)
 		{
 			ChatWidget->AddToViewport(10);
+			ChatWidget->OnWheelConfirmed.BindUObject(this, &UVoiceChatComponent::OnWheelConfirmed);
+			ChatWidget->OnWheelDismissed.BindUObject(this, &UVoiceChatComponent::OnWheelDismissed);
 		}
 	}
 
@@ -598,7 +650,7 @@ void UVoiceChatComponent::BeginPlay()
 			{
 				ChatWidget->SetConnecting(false);
 				if (bConnected)
-					ChatWidget->AddMessage(TEXT("System"), TEXT("Connected to voice server. Hold Ctrl+V to speak."));
+					ChatWidget->AddMessage(TEXT("System"), TEXT("Connected. Hold Ctrl+V to speak. Ctrl+Shift+V to change language."));
 				else
 					ChatWidget->ShowError(TEXT("Could not connect to whisper server. Is it running?"));
 			}
@@ -625,60 +677,77 @@ void UVoiceChatComponent::TickComponent(float DeltaTime, ELevelTick TickType, FA
 	bool bShiftHeld = PC->IsInputKeyDown(EKeys::LeftShift) || PC->IsInputKeyDown(EKeys::RightShift);
 	bool bVHeld = PC->IsInputKeyDown(EKeys::V);
 
-	// Ctrl+Shift+V = enter language selection mode, use arrow keys to pick
-	bool bLangSelectActive = bCtrlHeld && bShiftHeld && bVHeld;
-	if (bLangSelectActive && !bLangSelectMode)
+	// Ctrl+Shift+V = toggle language wheel
+	bool bLangSelectPressed = bCtrlHeld && bShiftHeld && bVHeld;
+	if (bLangSelectPressed && !bLangKeyHeld)
 	{
-		bLangSelectMode = true;
-		if (ChatWidget && SupportedLocales.Num() > 0)
+		bLangKeyHeld = true;
+		if (!bWheelOpen && ChatWidget)
 		{
-			ChatWidget->AddMessage(TEXT("System"), FString::Printf(TEXT("Language select: %s  (Left/Right to change, release to confirm)"), *SupportedLocales[CurrentLocaleIndex]));
+			bWheelOpen = true;
+			ChatWidget->ShowLanguageWheel(SupportedLocales, CurrentLocaleIndex);
+
+			// Show cursor so the player can interact with the wheel
+			PC->bShowMouseCursor = true;
+			PC->SetInputMode(FInputModeGameAndUI().SetHideCursorDuringCapture(false));
+		}
+	}
+	else if (!bLangSelectPressed)
+	{
+		bLangKeyHeld = false;
+	}
+
+	// Ctrl+V (without Shift) = push to talk (only when wheel is closed)
+	if (!bWheelOpen)
+	{
+		bool bPushToTalk = bCtrlHeld && bVHeld && !bShiftHeld;
+
+		if (bPushToTalk && !bKeyHeld) { bKeyHeld = true; StartRecording(); }
+		else if (!bPushToTalk && bKeyHeld) { bKeyHeld = false; StopRecording(); }
+	}
+}
+
+void UVoiceChatComponent::OnWheelConfirmed(int32 SelectedIndex)
+{
+	if (SupportedLocales.IsValidIndex(SelectedIndex))
+	{
+		CurrentLocaleIndex = SelectedIndex;
+		FString NewLocale = SupportedLocales[CurrentLocaleIndex];
+		if (WhisperClient)
+		{
+			WhisperClient->Locale = NewLocale;
+			WhisperClient->SendLocaleUpdate();
+		}
+		UE_LOG(LogTemp, Log, TEXT("VoiceChat: Language switched to %s"), *NewLocale);
+		if (ChatWidget)
+		{
+			ChatWidget->AddMessage(TEXT("System"), FString::Printf(TEXT("Language set to: %s"), *NewLocale));
 		}
 	}
 
-	if (bLangSelectActive && SupportedLocales.Num() > 1)
+	// Close wheel and restore game input
+	bWheelOpen = false;
+	if (ChatWidget) ChatWidget->HideLanguageWheel();
+
+	APlayerController* PC = Cast<APlayerController>(GetOwner());
+	if (PC)
 	{
-		bool bRightHeld = PC->IsInputKeyDown(EKeys::Right);
-		bool bLeftHeld = PC->IsInputKeyDown(EKeys::Left);
-
-		if ((bRightHeld || bLeftHeld) && !bArrowPressed)
-		{
-			bArrowPressed = true;
-			if (bRightHeld)
-			{
-				CurrentLocaleIndex = (CurrentLocaleIndex + 1) % SupportedLocales.Num();
-			}
-			else
-			{
-				CurrentLocaleIndex = (CurrentLocaleIndex - 1 + SupportedLocales.Num()) % SupportedLocales.Num();
-			}
-			FString NewLocale = SupportedLocales[CurrentLocaleIndex];
-			if (WhisperClient)
-			{
-				WhisperClient->Locale = NewLocale;
-			}
-			UE_LOG(LogTemp, Log, TEXT("VoiceChat: Language switched to %s"), *NewLocale);
-			if (ChatWidget)
-			{
-				ChatWidget->AddMessage(TEXT("System"), FString::Printf(TEXT("Language: %s"), *NewLocale));
-			}
-		}
-		else if (!bRightHeld && !bLeftHeld)
-		{
-			bArrowPressed = false;
-		}
+		PC->bShowMouseCursor = false;
+		PC->SetInputMode(FInputModeGameOnly());
 	}
+}
 
-	if (!bLangSelectActive && bLangSelectMode)
+void UVoiceChatComponent::OnWheelDismissed()
+{
+	bWheelOpen = false;
+	if (ChatWidget) ChatWidget->HideLanguageWheel();
+
+	APlayerController* PC = Cast<APlayerController>(GetOwner());
+	if (PC)
 	{
-		bLangSelectMode = false;
+		PC->bShowMouseCursor = false;
+		PC->SetInputMode(FInputModeGameOnly());
 	}
-
-	// Ctrl+V (without Shift) = push to talk
-	bool bPushToTalk = bCtrlHeld && bVHeld && !bShiftHeld;
-
-	if (bPushToTalk && !bKeyHeld) { bKeyHeld = true; StartRecording(); }
-	else if (!bPushToTalk && bKeyHeld) { bKeyHeld = false; StopRecording(); }
 }
 
 void UVoiceChatComponent::StartRecording()
@@ -716,10 +785,10 @@ void UVoiceChatComponent::StopRecording()
 	if (PCMData.Num() > 0) WhisperClient->SendAudio(PCMData);
 }
 
-void UVoiceChatComponent::OnTranscriptionReceived(const FString& Speaker, const FString& Text, const FString& Translated)
+void UVoiceChatComponent::OnTranscriptionReceived(const FString& Speaker, const FString& Text)
 {
 	UE_LOG(LogTemp, Log, TEXT("VoiceChat: [%s] %s"), *Speaker, *Text);
-	if (ChatWidget) ChatWidget->AddMessage(Speaker, Text, Translated);
+	if (ChatWidget) ChatWidget->AddMessage(Speaker, Text);
 }
 
 void UVoiceChatComponent::OnError(const FString& ErrorMessage)
@@ -781,10 +850,11 @@ class UScrollBox;
 class UTextBlock;
 class UBorder;
 class UOverlay;
+class SLanguageWheel;
 
 /**
  * In-game chat widget that displays transcribed voice messages.
- * Shows a scrollable chat log and a recording indicator.
+ * Shows a scrollable chat log, recording indicator, and language wheel.
  */
 UCLASS()
 class UVoiceChatWidget : public UUserWidget
@@ -792,10 +862,34 @@ class UVoiceChatWidget : public UUserWidget
 	GENERATED_BODY()
 
 public:
-	void AddMessage(const FString& Speaker, const FString& Text, const FString& Translated = TEXT(""));
+	void AddMessage(const FString& Speaker, const FString& Text);
 	void SetRecording(bool bRecording);
 	void SetConnecting(bool bConnecting);
 	void ShowError(const FString& ErrorText);
+
+	/** Show the radial language wheel. */
+	void ShowLanguageWheel(const TArray<FString>& Locales, int32 CurrentIndex);
+
+	/** Hide the language wheel. */
+	void HideLanguageWheel();
+
+	/** Returns true if the wheel is currently visible. */
+	bool IsWheelVisible() const;
+
+	/** Scroll the wheel selection by delta (+1 or -1). */
+	void ScrollWheel(int32 Delta);
+
+	/** Confirm the current wheel selection. Returns the selected index, or -1 if wheel not open. */
+	int32 ConfirmWheelSelection();
+
+	/** Dismiss wheel without changing language. */
+	void DismissWheel();
+
+	DECLARE_DELEGATE_OneParam(FOnWheelConfirmed, int32 /*SelectedIndex*/);
+	FOnWheelConfirmed OnWheelConfirmed;
+
+	DECLARE_DELEGATE(FOnWheelDismissed);
+	FOnWheelDismissed OnWheelDismissed;
 
 protected:
 	virtual TSharedRef<SWidget> RebuildWidget() override;
@@ -805,6 +899,8 @@ private:
 	TSharedPtr<STextBlock> RecordingIndicator;
 	TSharedPtr<STextBlock> StatusText;
 	TSharedPtr<SScrollBox> ScrollBox;
+	TSharedPtr<SLanguageWheel> LanguageWheel;
+	TSharedPtr<SBox> WheelContainer;
 	static constexpr int32 MaxMessages = 50;
 	int32 MessageCount = 0;
 };
@@ -814,6 +910,7 @@ private:
 
 ```cpp
 #include "VoiceChatWidget.h"
+#include "SLanguageWheel.h"
 
 #include "Widgets/SBoxPanel.h"
 #include "Widgets/SOverlay.h"
@@ -821,19 +918,104 @@ private:
 #include "Widgets/Layout/SBox.h"
 #include "Widgets/Layout/SScrollBox.h"
 #include "Widgets/Text/STextBlock.h"
+#include "Misc/Paths.h"
+
+// Helper: add an inclusive Unicode range to a sub-font
+static void AddRange(FCompositeSubFont& Sub, int32 Lo, int32 Hi)
+{
+	Sub.CharacterRanges.Add(FInt32Range(FInt32RangeBound::Inclusive(Lo), FInt32RangeBound::Inclusive(Hi)));
+}
+
+// Build a composite font with Noto Sans as default + CJK/Devanagari/Arabic fallbacks.
+static FSlateFontInfo GetChatFont(int32 Size)
+{
+	static TSharedPtr<FCompositeFont> ChatFont;
+	if (!ChatFont.IsValid())
+	{
+		FString FontDir = FPaths::ProjectContentDir() / TEXT("Fonts");
+
+		ChatFont = MakeShared<FCompositeFont>();
+
+		// Default typeface: Noto Sans (Latin, Cyrillic, Greek)
+		{
+			FTypefaceEntry& Entry = ChatFont->DefaultTypeface.Fonts[ChatFont->DefaultTypeface.Fonts.AddDefaulted()];
+			Entry.Name = TEXT("Regular");
+			Entry.Font = FFontData(FontDir / TEXT("NotoSans-Regular.ttf"), EFontHinting::Auto, EFontLoadingPolicy::LazyLoad);
+		}
+
+		// CJK (Japanese, Chinese, Korean)
+		{
+			FCompositeSubFont& Sub = ChatFont->SubTypefaces[ChatFont->SubTypefaces.AddDefaulted()];
+			AddRange(Sub, 0x2E80, 0x2EFF);   // CJK Radicals Supplement
+			AddRange(Sub, 0x2F00, 0x2FDF);   // Kangxi Radicals
+			AddRange(Sub, 0x3000, 0x303F);   // CJK Symbols and Punctuation
+			AddRange(Sub, 0x3040, 0x309F);   // Hiragana
+			AddRange(Sub, 0x30A0, 0x30FF);   // Katakana
+			AddRange(Sub, 0x31F0, 0x31FF);   // Katakana Phonetic Extensions
+			AddRange(Sub, 0x3200, 0x32FF);   // Enclosed CJK Letters and Months
+			AddRange(Sub, 0x3300, 0x33FF);   // CJK Compatibility
+			AddRange(Sub, 0x3400, 0x4DBF);   // CJK Unified Ideographs Extension A
+			AddRange(Sub, 0x4E00, 0x9FFF);   // CJK Unified Ideographs
+			AddRange(Sub, 0xAC00, 0xD7AF);   // Hangul Syllables
+			AddRange(Sub, 0x1100, 0x11FF);   // Hangul Jamo
+			AddRange(Sub, 0x3130, 0x318F);   // Hangul Compatibility Jamo
+			AddRange(Sub, 0xF900, 0xFAFF);   // CJK Compatibility Ideographs
+			AddRange(Sub, 0xFE30, 0xFE4F);   // CJK Compatibility Forms
+			AddRange(Sub, 0xFF00, 0xFFEF);   // Halfwidth and Fullwidth Forms
+			FTypefaceEntry& Entry = Sub.Typeface.Fonts[Sub.Typeface.Fonts.AddDefaulted()];
+			Entry.Name = TEXT("CJK");
+			Entry.Font = FFontData(FontDir / TEXT("NotoSansCJKjp-Regular.otf"), EFontHinting::Auto, EFontLoadingPolicy::LazyLoad);
+		}
+
+		// Devanagari (Hindi)
+		{
+			FCompositeSubFont& Sub = ChatFont->SubTypefaces[ChatFont->SubTypefaces.AddDefaulted()];
+			AddRange(Sub, 0x0900, 0x097F);   // Devanagari
+			AddRange(Sub, 0xA8E0, 0xA8FF);   // Devanagari Extended
+			FTypefaceEntry& Entry = Sub.Typeface.Fonts[Sub.Typeface.Fonts.AddDefaulted()];
+			Entry.Name = TEXT("Devanagari");
+			Entry.Font = FFontData(FontDir / TEXT("NotoSansDevanagari-Regular.ttf"), EFontHinting::Auto, EFontLoadingPolicy::LazyLoad);
+		}
+
+		// Arabic
+		{
+			FCompositeSubFont& Sub = ChatFont->SubTypefaces[ChatFont->SubTypefaces.AddDefaulted()];
+			AddRange(Sub, 0x0600, 0x06FF);   // Arabic
+			AddRange(Sub, 0x0750, 0x077F);   // Arabic Supplement
+			AddRange(Sub, 0xFB50, 0xFDFF);   // Arabic Presentation Forms-A
+			AddRange(Sub, 0xFE70, 0xFEFF);   // Arabic Presentation Forms-B
+			FTypefaceEntry& Entry = Sub.Typeface.Fonts[Sub.Typeface.Fonts.AddDefaulted()];
+			Entry.Name = TEXT("Arabic");
+			Entry.Font = FFontData(FontDir / TEXT("NotoSansArabic-Regular.ttf"), EFontHinting::Auto, EFontLoadingPolicy::LazyLoad);
+		}
+
+		// Thai (Noto Sans covers Thai)
+		{
+			FCompositeSubFont& Sub = ChatFont->SubTypefaces[ChatFont->SubTypefaces.AddDefaulted()];
+			AddRange(Sub, 0x0E00, 0x0E7F);   // Thai
+			FTypefaceEntry& Entry = Sub.Typeface.Fonts[Sub.Typeface.Fonts.AddDefaulted()];
+			Entry.Name = TEXT("Thai");
+			Entry.Font = FFontData(FontDir / TEXT("NotoSans-Regular.ttf"), EFontHinting::Auto, EFontLoadingPolicy::LazyLoad);
+		}
+
+		UE_LOG(LogTemp, Log, TEXT("VoiceChat: Loaded composite font from %s"), *FontDir);
+	}
+
+	return FSlateFontInfo(ChatFont.ToSharedRef(), Size);
+}
 
 TSharedRef<SWidget> UVoiceChatWidget::RebuildWidget()
 {
 	RecordingIndicator = SNew(STextBlock)
 		.Text(FText::FromString(TEXT("[ RECORDING ]")))
 		.ColorAndOpacity(FSlateColor(FLinearColor::Red))
-		.Font(FCoreStyle::GetDefaultFontStyle("Bold", 14))
+		.Font(GetChatFont(14))
 		.Visibility(EVisibility::Collapsed);
 
 	StatusText = SNew(STextBlock)
 		.Text(FText::GetEmpty())
 		.ColorAndOpacity(FSlateColor(FLinearColor(1.0f, 0.7f, 0.0f)))
-		.Font(FCoreStyle::GetDefaultFontStyle("Regular", 10))
+		.Font(GetChatFont(10))
 		.Visibility(EVisibility::Collapsed);
 
 	ChatLogBox = SNew(SVerticalBox);
@@ -845,35 +1027,113 @@ TSharedRef<SWidget> UVoiceChatWidget::RebuildWidget()
 			ChatLogBox.ToSharedRef()
 		];
 
-	return SNew(SBox)
-		.WidthOverride(450.0f)
-		.MaxDesiredHeight(300.0f)
+	// Wheel container — centered on screen, hidden by default
+	WheelContainer = SNew(SBox)
+		.WidthOverride(400.0f)
+		.HeightOverride(400.0f)
+		.Visibility(EVisibility::Collapsed);
+
+	return SNew(SOverlay)
+		// Chat log at bottom-left
+		+ SOverlay::Slot()
 		.HAlign(HAlign_Left)
 		.VAlign(VAlign_Bottom)
 		.Padding(FMargin(20.0f, 0.0f, 0.0f, 20.0f))
 		[
-			SNew(SBorder)
-			.BorderBackgroundColor(FLinearColor(0.0f, 0.0f, 0.0f, 0.6f))
-			.Padding(FMargin(12.0f, 8.0f))
+			SNew(SBox)
+			.WidthOverride(450.0f)
+			.MaxDesiredHeight(300.0f)
 			[
-				SNew(SVerticalBox)
-				+ SVerticalBox::Slot().FillHeight(1.0f)
+				SNew(SBorder)
+				.BorderBackgroundColor(FLinearColor(0.0f, 0.0f, 0.0f, 0.6f))
+				.Padding(FMargin(12.0f, 8.0f))
 				[
-					ScrollBox.ToSharedRef()
-				]
-				+ SVerticalBox::Slot().AutoHeight().Padding(FMargin(0.0f, 4.0f, 0.0f, 0.0f))
-				[
-					StatusText.ToSharedRef()
-				]
-				+ SVerticalBox::Slot().AutoHeight().Padding(FMargin(0.0f, 4.0f, 0.0f, 0.0f))
-				[
-					RecordingIndicator.ToSharedRef()
+					SNew(SVerticalBox)
+					+ SVerticalBox::Slot().FillHeight(1.0f)
+					[
+						ScrollBox.ToSharedRef()
+					]
+					+ SVerticalBox::Slot().AutoHeight().Padding(FMargin(0.0f, 4.0f, 0.0f, 0.0f))
+					[
+						StatusText.ToSharedRef()
+					]
+					+ SVerticalBox::Slot().AutoHeight().Padding(FMargin(0.0f, 4.0f, 0.0f, 0.0f))
+					[
+						RecordingIndicator.ToSharedRef()
+					]
 				]
 			]
+		]
+		// Language wheel centered on screen
+		+ SOverlay::Slot()
+		.HAlign(HAlign_Center)
+		.VAlign(VAlign_Center)
+		[
+			WheelContainer.ToSharedRef()
 		];
 }
 
-void UVoiceChatWidget::AddMessage(const FString& Speaker, const FString& Text, const FString& Translated)
+void UVoiceChatWidget::ShowLanguageWheel(const TArray<FString>& Locales, int32 CurrentIndex)
+{
+	if (!WheelContainer.IsValid()) return;
+
+	LanguageWheel = SNew(SLanguageWheel)
+		.Locales(Locales)
+		.SelectedIndex(CurrentIndex)
+		.OnLanguageSelected_Lambda([this](int32 Index)
+		{
+			OnWheelConfirmed.ExecuteIfBound(Index);
+		})
+		.OnWheelDismissed_Lambda([this]()
+		{
+			OnWheelDismissed.ExecuteIfBound();
+		});
+
+	WheelContainer->SetContent(LanguageWheel.ToSharedRef());
+	WheelContainer->SetVisibility(EVisibility::Visible);
+
+	// Give the wheel keyboard/mouse focus
+	FSlateApplication::Get().SetKeyboardFocus(LanguageWheel);
+}
+
+void UVoiceChatWidget::HideLanguageWheel()
+{
+	if (WheelContainer.IsValid())
+	{
+		WheelContainer->SetVisibility(EVisibility::Collapsed);
+		WheelContainer->SetContent(SNullWidget::NullWidget);
+	}
+	LanguageWheel.Reset();
+}
+
+bool UVoiceChatWidget::IsWheelVisible() const
+{
+	return WheelContainer.IsValid() && WheelContainer->GetVisibility() == EVisibility::Visible;
+}
+
+void UVoiceChatWidget::ScrollWheel(int32 Delta)
+{
+	if (LanguageWheel.IsValid())
+	{
+		LanguageWheel->ScrollSelection(Delta);
+	}
+}
+
+int32 UVoiceChatWidget::ConfirmWheelSelection()
+{
+	if (LanguageWheel.IsValid())
+	{
+		return LanguageWheel->GetSelectedIndex();
+	}
+	return -1;
+}
+
+void UVoiceChatWidget::DismissWheel()
+{
+	HideLanguageWheel();
+}
+
+void UVoiceChatWidget::AddMessage(const FString& Speaker, const FString& Text)
 {
 	if (!ChatLogBox.IsValid()) return;
 
@@ -885,35 +1145,15 @@ void UVoiceChatWidget::AddMessage(const FString& Speaker, const FString& Text, c
 
 	FString FormattedMsg = FString::Printf(TEXT("[%s]: %s"), *Speaker, *Text);
 
-	TSharedPtr<SVerticalBox> MsgBox = SNew(SVerticalBox)
-		+ SVerticalBox::Slot().AutoHeight()
-		[
-			SNew(STextBlock)
-			.Text(FText::FromString(FormattedMsg))
-			.ColorAndOpacity(FSlateColor(FLinearColor::White))
-			.Font(FCoreStyle::GetDefaultFontStyle("Regular", 12))
-			.AutoWrapText(true)
-		];
-
-	if (!Translated.IsEmpty())
-	{
-		MsgBox->AddSlot()
-			.AutoHeight()
-			.Padding(FMargin(20.0f, 1.0f, 0.0f, 0.0f))
-			[
-				SNew(STextBlock)
-				.Text(FText::FromString(Translated))
-				.ColorAndOpacity(FSlateColor(FLinearColor(0.7f, 0.7f, 0.7f)))
-				.Font(FCoreStyle::GetDefaultFontStyle("Italic", 11))
-				.AutoWrapText(true)
-			];
-	}
-
 	ChatLogBox->AddSlot()
 		.AutoHeight()
 		.Padding(FMargin(0.0f, 2.0f))
 		[
-			MsgBox.ToSharedRef()
+			SNew(STextBlock)
+			.Text(FText::FromString(FormattedMsg))
+			.ColorAndOpacity(FSlateColor(FLinearColor::White))
+			.Font(GetChatFont(12))
+			.AutoWrapText(true)
 		];
 
 	MessageCount++;
@@ -953,6 +1193,364 @@ void UVoiceChatWidget::ShowError(const FString& ErrorText)
 }
 ```
 
+### SLanguageWheel.h
+
+```cpp
+#pragma once
+
+#include "CoreMinimal.h"
+#include "Widgets/SCompoundWidget.h"
+#include "Widgets/DeclarativeSyntaxSupport.h"
+
+class FSlateWindowElementList;
+
+/**
+ * GTA V-style radial language selector.
+ * Draws a semi-transparent wheel with language codes arranged in a circle.
+ * Mouse scroll cycles selection, left-click confirms.
+ */
+class SLanguageWheel : public SCompoundWidget
+{
+public:
+	DECLARE_DELEGATE_OneParam(FOnLanguageSelected, int32 /*SelectedIndex*/);
+	DECLARE_DELEGATE(FOnWheelDismissed);
+
+	SLATE_BEGIN_ARGS(SLanguageWheel)
+		: _Locales()
+		, _SelectedIndex(0)
+	{}
+		SLATE_ARGUMENT(TArray<FString>, Locales)
+		SLATE_ARGUMENT(int32, SelectedIndex)
+		SLATE_EVENT(FOnLanguageSelected, OnLanguageSelected)
+		SLATE_EVENT(FOnWheelDismissed, OnWheelDismissed)
+	SLATE_END_ARGS()
+
+	void Construct(const FArguments& InArgs);
+
+	void SetSelectedIndex(int32 NewIndex);
+	int32 GetSelectedIndex() const { return SelectedIndex; }
+	void ScrollSelection(int32 Delta);
+
+	virtual int32 OnPaint(const FPaintArgs& Args, const FGeometry& AllottedGeometry, const FSlateRect& MyCullingRect,
+		FSlateWindowElementList& OutDrawElements, int32 LayerId, const FWidgetStyle& InWidgetStyle, bool bParentEnabled) const override;
+
+	virtual FVector2D ComputeDesiredSize(float LayoutScaleMultiplier) const override;
+	virtual FReply OnMouseButtonDown(const FGeometry& MyGeometry, const FPointerEvent& MouseEvent) override;
+	virtual FReply OnMouseWheel(const FGeometry& MyGeometry, const FPointerEvent& MouseEvent) override;
+	virtual bool SupportsKeyboardFocus() const override { return true; }
+
+private:
+	/** Full display names for the locale codes. */
+	static FString GetLanguageDisplayName(const FString& Locale);
+
+	TArray<FString> Locales;
+	int32 SelectedIndex = 0;
+	FOnLanguageSelected OnLanguageSelected;
+	FOnWheelDismissed OnWheelDismissed;
+
+	static constexpr float WheelRadius = 150.0f;
+	static constexpr float CenterRadius = 45.0f;
+	static constexpr float WheelSize = 400.0f;
+};
+```
+
+### SLanguageWheel.cpp
+
+```cpp
+#include "SLanguageWheel.h"
+#include "Rendering/DrawElements.h"
+#include "Fonts/FontMeasure.h"
+#include "Styling/CoreStyle.h"
+#include "Framework/Application/SlateApplication.h"
+
+void SLanguageWheel::Construct(const FArguments& InArgs)
+{
+	Locales = InArgs._Locales;
+	SelectedIndex = InArgs._SelectedIndex;
+	OnLanguageSelected = InArgs._OnLanguageSelected;
+	OnWheelDismissed = InArgs._OnWheelDismissed;
+}
+
+void SLanguageWheel::SetSelectedIndex(int32 NewIndex)
+{
+	if (Locales.Num() > 0)
+	{
+		SelectedIndex = ((NewIndex % Locales.Num()) + Locales.Num()) % Locales.Num();
+	}
+}
+
+void SLanguageWheel::ScrollSelection(int32 Delta)
+{
+	SetSelectedIndex(SelectedIndex + Delta);
+}
+
+FVector2D SLanguageWheel::ComputeDesiredSize(float LayoutScaleMultiplier) const
+{
+	return FVector2D(WheelSize, WheelSize);
+}
+
+FString SLanguageWheel::GetLanguageDisplayName(const FString& Locale)
+{
+	if (Locale == TEXT("en")) return TEXT("English");
+	if (Locale == TEXT("zh")) return TEXT("Chinese");
+	if (Locale == TEXT("es")) return TEXT("Spanish");
+	if (Locale == TEXT("hi")) return TEXT("Hindi");
+	if (Locale == TEXT("ar")) return TEXT("Arabic");
+	if (Locale == TEXT("pt")) return TEXT("Portuguese");
+	if (Locale == TEXT("ja")) return TEXT("Japanese");
+	if (Locale == TEXT("ko")) return TEXT("Korean");
+	if (Locale == TEXT("fr")) return TEXT("French");
+	if (Locale == TEXT("de")) return TEXT("German");
+	if (Locale == TEXT("ru")) return TEXT("Russian");
+	if (Locale == TEXT("it")) return TEXT("Italian");
+	if (Locale == TEXT("nl")) return TEXT("Dutch");
+	if (Locale == TEXT("pl")) return TEXT("Polish");
+	if (Locale == TEXT("tr")) return TEXT("Turkish");
+	if (Locale == TEXT("sv")) return TEXT("Swedish");
+	if (Locale == TEXT("th")) return TEXT("Thai");
+	if (Locale == TEXT("vi")) return TEXT("Vietnamese");
+	if (Locale == TEXT("id")) return TEXT("Indonesian");
+	if (Locale == TEXT("cs")) return TEXT("Czech");
+	return Locale.ToUpper();
+}
+
+int32 SLanguageWheel::OnPaint(const FPaintArgs& Args, const FGeometry& AllottedGeometry, const FSlateRect& MyCullingRect,
+	FSlateWindowElementList& OutDrawElements, int32 LayerId, const FWidgetStyle& InWidgetStyle, bool bParentEnabled) const
+{
+	const FVector2D Center = AllottedGeometry.GetLocalSize() * 0.5f;
+	const int32 NumLocales = Locales.Num();
+	if (NumLocales == 0)
+	{
+		return LayerId;
+	}
+
+	const FSlateBrush* WhiteBrush = FCoreStyle::Get().GetBrush("WhiteBrush");
+
+	// Draw outer ring background
+	{
+		constexpr int32 CircleSegments = 64;
+		TArray<FSlateVertex> Vertices;
+		TArray<SlateIndex> Indices;
+
+		FSlateVertex CenterVert;
+		CenterVert.Position = FVector2f(Center.X, Center.Y);
+		CenterVert.Color = FColor(0, 0, 0, 180);
+		CenterVert.TexCoords[0] = 0.5f;
+		CenterVert.TexCoords[1] = 0.5f;
+		CenterVert.TexCoords[2] = 0.0f;
+		CenterVert.TexCoords[3] = 0.0f;
+		Vertices.Add(CenterVert);
+
+		for (int32 i = 0; i <= CircleSegments; i++)
+		{
+			float Angle = 2.0f * PI * i / CircleSegments;
+			FSlateVertex Vert;
+			Vert.Position = FVector2f(
+				Center.X + WheelRadius * 1.15f * FMath::Cos(Angle),
+				Center.Y + WheelRadius * 1.15f * FMath::Sin(Angle));
+			Vert.Color = FColor(0, 0, 0, 140);
+			Vert.TexCoords[0] = 0.5f + 0.5f * FMath::Cos(Angle);
+			Vert.TexCoords[1] = 0.5f + 0.5f * FMath::Sin(Angle);
+			Vert.TexCoords[2] = 0.0f;
+			Vert.TexCoords[3] = 0.0f;
+			Vertices.Add(Vert);
+
+			if (i > 0)
+			{
+				Indices.Add(0);
+				Indices.Add(i);
+				Indices.Add(i + 1);
+			}
+		}
+
+		FSlateDrawElement::MakeCustomVerts(OutDrawElements, LayerId, WhiteBrush->GetRenderingResource(),
+			Vertices, Indices, nullptr, 0, 0);
+	}
+
+	LayerId++;
+
+	// Draw highlight for selected segment
+	const float AnglePerSegment = 2.0f * PI / NumLocales;
+	const float StartOffset = -PI / 2.0f;
+
+	{
+		float SegStart = StartOffset + SelectedIndex * AnglePerSegment;
+		float SegEnd = SegStart + AnglePerSegment;
+		constexpr int32 HighlightSegments = 20;
+
+		TArray<FSlateVertex> Vertices;
+		TArray<SlateIndex> Indices;
+
+		FSlateVertex CenterVert;
+		CenterVert.Position = FVector2f(Center.X, Center.Y);
+		CenterVert.Color = FColor(60, 160, 255, 100);
+		CenterVert.TexCoords[0] = 0.5f;
+		CenterVert.TexCoords[1] = 0.5f;
+		CenterVert.TexCoords[2] = 0.0f;
+		CenterVert.TexCoords[3] = 0.0f;
+		Vertices.Add(CenterVert);
+
+		for (int32 i = 0; i <= HighlightSegments; i++)
+		{
+			float Angle = SegStart + (SegEnd - SegStart) * i / HighlightSegments;
+			FSlateVertex Vert;
+			Vert.Position = FVector2f(
+				Center.X + WheelRadius * 1.15f * FMath::Cos(Angle),
+				Center.Y + WheelRadius * 1.15f * FMath::Sin(Angle));
+			Vert.Color = FColor(60, 160, 255, 80);
+			Vert.TexCoords[0] = 0.5f + 0.5f * FMath::Cos(Angle);
+			Vert.TexCoords[1] = 0.5f + 0.5f * FMath::Sin(Angle);
+			Vert.TexCoords[2] = 0.0f;
+			Vert.TexCoords[3] = 0.0f;
+			Vertices.Add(Vert);
+
+			if (i > 0)
+			{
+				Indices.Add(0);
+				Indices.Add(i);
+				Indices.Add(i + 1);
+			}
+		}
+
+		FSlateDrawElement::MakeCustomVerts(OutDrawElements, LayerId, WhiteBrush->GetRenderingResource(),
+			Vertices, Indices, nullptr, 0, 0);
+	}
+
+	LayerId++;
+
+	// Draw divider lines between segments
+	for (int32 i = 0; i < NumLocales; i++)
+	{
+		float Angle = StartOffset + i * AnglePerSegment;
+		FVector2D LineEnd(
+			Center.X + WheelRadius * 1.15f * FMath::Cos(Angle),
+			Center.Y + WheelRadius * 1.15f * FMath::Sin(Angle));
+
+		TArray<FVector2D> Points;
+		Points.Add(Center);
+		Points.Add(LineEnd);
+		FSlateDrawElement::MakeLines(OutDrawElements, LayerId, AllottedGeometry.ToPaintGeometry(),
+			Points, ESlateDrawEffect::None, FLinearColor(1.0f, 1.0f, 1.0f, 0.15f), true, 1.0f);
+	}
+
+	LayerId++;
+
+	// Draw language labels around the wheel
+	const FSlateFontInfo CodeFont = FCoreStyle::GetDefaultFontStyle("Bold", 16);
+	const FSlateFontInfo NameFont = FCoreStyle::GetDefaultFontStyle("Regular", 9);
+	TSharedRef<FSlateFontMeasure> FontMeasure = FSlateApplication::Get().GetRenderer()->GetFontMeasureService();
+
+	for (int32 i = 0; i < NumLocales; i++)
+	{
+		float MidAngle = StartOffset + (i + 0.5f) * AnglePerSegment;
+		float LabelRadius = WheelRadius * 0.72f;
+		FVector2D LabelPos(
+			Center.X + LabelRadius * FMath::Cos(MidAngle),
+			Center.Y + LabelRadius * FMath::Sin(MidAngle));
+
+		bool bSelected = (i == SelectedIndex);
+		FLinearColor CodeColor = bSelected ? FLinearColor(0.3f, 0.75f, 1.0f) : FLinearColor(0.85f, 0.85f, 0.85f);
+		FLinearColor NameColor = bSelected ? FLinearColor(0.6f, 0.85f, 1.0f) : FLinearColor(0.5f, 0.5f, 0.5f);
+
+		FString CodeStr = Locales[i].ToUpper();
+		FString NameStr = GetLanguageDisplayName(Locales[i]);
+
+		FVector2D CodeSize = FontMeasure->Measure(CodeStr, CodeFont);
+		FVector2D NameSize = FontMeasure->Measure(NameStr, NameFont);
+
+		float TotalHeight = CodeSize.Y + NameSize.Y + 2.0f;
+		FVector2D CodePos(LabelPos.X - CodeSize.X * 0.5f, LabelPos.Y - TotalHeight * 0.5f);
+		FVector2D NamePos(LabelPos.X - NameSize.X * 0.5f, LabelPos.Y - TotalHeight * 0.5f + CodeSize.Y + 2.0f);
+
+		FSlateDrawElement::MakeText(OutDrawElements, LayerId, AllottedGeometry.ToPaintGeometry(CodeSize, FSlateLayoutTransform(CodePos)),
+			CodeStr, CodeFont, ESlateDrawEffect::None, CodeColor);
+		FSlateDrawElement::MakeText(OutDrawElements, LayerId, AllottedGeometry.ToPaintGeometry(NameSize, FSlateLayoutTransform(NamePos)),
+			NameStr, NameFont, ESlateDrawEffect::None, NameColor);
+	}
+
+	LayerId++;
+
+	// Draw center circle with current selection
+	{
+		constexpr int32 CircleSegments = 32;
+		TArray<FSlateVertex> Vertices;
+		TArray<SlateIndex> Indices;
+
+		FSlateVertex CenterVert;
+		CenterVert.Position = FVector2f(Center.X, Center.Y);
+		CenterVert.Color = FColor(20, 20, 20, 220);
+		CenterVert.TexCoords[0] = 0.5f;
+		CenterVert.TexCoords[1] = 0.5f;
+		CenterVert.TexCoords[2] = 0.0f;
+		CenterVert.TexCoords[3] = 0.0f;
+		Vertices.Add(CenterVert);
+
+		for (int32 i = 0; i <= CircleSegments; i++)
+		{
+			float Angle = 2.0f * PI * i / CircleSegments;
+			FSlateVertex Vert;
+			Vert.Position = FVector2f(
+				Center.X + CenterRadius * FMath::Cos(Angle),
+				Center.Y + CenterRadius * FMath::Sin(Angle));
+			Vert.Color = FColor(30, 30, 30, 220);
+			Vert.TexCoords[0] = 0.5f + 0.5f * FMath::Cos(Angle);
+			Vert.TexCoords[1] = 0.5f + 0.5f * FMath::Sin(Angle);
+			Vert.TexCoords[2] = 0.0f;
+			Vert.TexCoords[3] = 0.0f;
+			Vertices.Add(Vert);
+
+			if (i > 0)
+			{
+				Indices.Add(0);
+				Indices.Add(i);
+				Indices.Add(i + 1);
+			}
+		}
+
+		FSlateDrawElement::MakeCustomVerts(OutDrawElements, LayerId, WhiteBrush->GetRenderingResource(),
+			Vertices, Indices, nullptr, 0, 0);
+	}
+
+	LayerId++;
+
+	// Center label — selected language code
+	if (Locales.IsValidIndex(SelectedIndex))
+	{
+		const FSlateFontInfo CenterFont = FCoreStyle::GetDefaultFontStyle("Bold", 20);
+		FString CenterStr = Locales[SelectedIndex].ToUpper();
+		FVector2D TextSize = FontMeasure->Measure(CenterStr, CenterFont);
+		FVector2D TextPos(Center.X - TextSize.X * 0.5f, Center.Y - TextSize.Y * 0.5f);
+
+		FSlateDrawElement::MakeText(OutDrawElements, LayerId, AllottedGeometry.ToPaintGeometry(TextSize, FSlateLayoutTransform(TextPos)),
+			CenterStr, CenterFont, ESlateDrawEffect::None, FLinearColor::White);
+	}
+
+	return LayerId;
+}
+
+FReply SLanguageWheel::OnMouseWheel(const FGeometry& MyGeometry, const FPointerEvent& MouseEvent)
+{
+	int32 Delta = MouseEvent.GetWheelDelta() > 0 ? -1 : 1;
+	ScrollSelection(Delta);
+	return FReply::Handled();
+}
+
+FReply SLanguageWheel::OnMouseButtonDown(const FGeometry& MyGeometry, const FPointerEvent& MouseEvent)
+{
+	if (MouseEvent.GetEffectingButton() == EKeys::LeftMouseButton)
+	{
+		OnLanguageSelected.ExecuteIfBound(SelectedIndex);
+		return FReply::Handled();
+	}
+	if (MouseEvent.GetEffectingButton() == EKeys::RightMouseButton)
+	{
+		OnWheelDismissed.ExecuteIfBound();
+		return FReply::Handled();
+	}
+	return FReply::Unhandled();
+}
+```
+
 ## Player Controller Integration
 
 Add the VoiceChatComponent as a default subobject in your player controller:
@@ -974,13 +1572,14 @@ AYourPlayerController::AYourPlayerController()
 }
 ```
 
-That's it. The component handles everything: mic capture, server connection, push-to-talk input, and chat UI.
+That's it. The component handles everything: mic capture, server connection, push-to-talk input, language selection, and chat UI.
 
 ## How to Apply to a New Unreal Project
 
 1. Create `Source/<ProjectName>/VoiceChat/` directory
-2. Copy all 6 files (WhisperClient.h/cpp, VoiceChatComponent.h/cpp, VoiceChatWidget.h/cpp)
+2. Copy all 8 files (WhisperClient, VoiceChatComponent, VoiceChatWidget, SLanguageWheel — .h and .cpp each)
 3. Add module dependencies to your `.Build.cs`
 4. Add `"<ProjectName>/VoiceChat"` to `PublicIncludePaths`
 5. Add VoiceChatComponent to your player controller
-6. Build and run alongside the whisper server
+6. Download Noto Sans fonts (Regular, CJK, Devanagari, Arabic) to `Content/Fonts/`
+7. Build and run alongside the whisper server
