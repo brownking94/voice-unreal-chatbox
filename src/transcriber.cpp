@@ -64,5 +64,32 @@ TranscribeResult Transcriber::transcribe(const std::vector<uint8_t>& pcm16_bytes
         }
     }
 
-    return {result, detected};
+    // If source language is not English, run a second pass with translate=true
+    // to get a high-quality English translation directly from Whisper
+    std::string english_translation;
+    if (!detected.empty() && detected != "en" && !result.empty()) {
+        whisper_full_params tparams = whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
+        tparams.print_progress   = false;
+        tparams.print_special    = false;
+        tparams.print_realtime   = false;
+        tparams.print_timestamps = false;
+        tparams.single_segment   = false;
+        tparams.language         = language.c_str();
+        tparams.translate        = true;
+        tparams.n_threads        = 4;
+
+        int tret = whisper_full(ctx_, tparams, pcm_f32.data(), static_cast<int>(pcm_f32.size()));
+        if (tret == 0) {
+            int tn_segments = whisper_full_n_segments(ctx_);
+            for (int i = 0; i < tn_segments; i++) {
+                const char* text = whisper_full_get_segment_text(ctx_, i);
+                if (text) {
+                    english_translation += text;
+                }
+            }
+            std::cout << "[transcriber] Whisper translate: " << english_translation << std::endl;
+        }
+    }
+
+    return {result, detected, english_translation};
 }

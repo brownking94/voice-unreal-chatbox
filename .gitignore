@@ -1,8 +1,12 @@
 build/
 models/*.bin
 models/*.en
+models/opus-mt-*/
+models/nllb-*/
 *.wav
 .DS_Store
 CMakeUserPresets.json
 .cache/
 compile_commands.json
+.claude/
+python/

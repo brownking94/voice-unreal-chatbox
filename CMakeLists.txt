@@ -16,13 +16,7 @@ set(WHISPER_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 option(ENABLE_CUDA "Enable NVIDIA CUDA GPU acceleration" ON)
 if(ENABLE_CUDA)
     set(GGML_CUDA ON CACHE BOOL "" FORCE)
-    # Target sm_89 (Ada Lovelace) which is forward-compatible with Blackwell
-    # consumer GPUs.  ggml forcibly rewrites 12X → 12Xa, enabling MXFP4
-    # block-scale MMA instructions that only work on data-center Blackwell
-    # (sm_120a), not consumer RTX 5070/5080/5090.  Using 89 sidesteps this.
     set(CMAKE_CUDA_ARCHITECTURES "89" CACHE STRING "" FORCE)
-    # CUDA 13+ CCCL headers require the standard-conforming preprocessor on MSVC.
-    # Use -Xcompiler so nvcc forwards the flag to cl.exe instead of consuming it.
     if(MSVC)
         add_compile_options($<$<COMPILE_LANGUAGE:C,CXX>:/Zc:preprocessor>)
         add_compile_options($<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=/Zc:preprocessor>)
@@ -46,49 +40,44 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(miniaudio)
 
-# ── SentencePiece (tokenizer for NLLB translation) ──────────────────────────
-option(ENABLE_TRANSLATION "Enable NLLB translation via CTranslate2" ON)
+# ── SentencePiece + CTranslate2 (translation) ───────────────────────────────
+set(SPM_ENABLE_SHARED OFF CACHE BOOL "" FORCE)
+set(SPM_ENABLE_TCMALLOC OFF CACHE BOOL "" FORCE)
 
-if(ENABLE_TRANSLATION)
-    set(SPM_ENABLE_SHARED OFF CACHE BOOL "" FORCE)
-    set(SPM_ENABLE_TCMALLOC OFF CACHE BOOL "" FORCE)
+FetchContent_Declare(
+    sentencepiece
+    GIT_REPOSITORY https://github.com/google/sentencepiece.git
+    GIT_TAG        v0.2.0
+    GIT_SHALLOW    TRUE
+)
+FetchContent_MakeAvailable(sentencepiece)
 
-    FetchContent_Declare(
-        sentencepiece
-        GIT_REPOSITORY https://github.com/google/sentencepiece.git
-        GIT_TAG        v0.2.0
-        GIT_SHALLOW    TRUE
-    )
-    FetchContent_MakeAvailable(sentencepiece)
+set(WITH_MKL OFF CACHE BOOL "" FORCE)
+set(WITH_DNNL OFF CACHE BOOL "" FORCE)
+set(WITH_OPENBLAS OFF CACHE BOOL "" FORCE)
+set(OPENMP_RUNTIME "NONE" CACHE STRING "" FORCE)
+set(BUILD_CLI OFF CACHE BOOL "" FORCE)
 
-    # ── CTranslate2 (neural machine translation inference) ───────────────────
-    set(WITH_MKL OFF CACHE BOOL "" FORCE)
-    set(OPENMP_RUNTIME "NONE" CACHE STRING "" FORCE)
-    set(BUILD_CLI OFF CACHE BOOL "" FORCE)
-
-    if(ENABLE_CUDA)
-        set(WITH_CUDA ON CACHE BOOL "" FORCE)
-        set(WITH_CUDNN OFF CACHE BOOL "" FORCE)
-    else()
-        set(WITH_CUDA OFF CACHE BOOL "" FORCE)
-    endif()
-
-    # /FS allows parallel CUDA compiles to share PDB files (avoids C1041).
-    # Must be in CMAKE_CXX_FLAGS so CTranslate2's generated CUDA→cpp intermediates inherit it.
-    if(MSVC)
-        set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} /FS")
-        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /FS")
-        set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -Xcompiler=/FS")
-    endif()
-
-    FetchContent_Declare(
-        ctranslate2
-        GIT_REPOSITORY https://github.com/OpenNMT/CTranslate2.git
-        GIT_TAG        v4.5.0
-        GIT_SHALLOW    TRUE
-    )
-    FetchContent_MakeAvailable(ctranslate2)
+if(ENABLE_CUDA)
+    set(WITH_CUDA ON CACHE BOOL "" FORCE)
+    set(WITH_CUDNN OFF CACHE BOOL "" FORCE)
+else()
+    set(WITH_CUDA OFF CACHE BOOL "" FORCE)
 endif()
+
+if(MSVC)
+    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} /FS")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /FS")
+    set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -Xcompiler=/FS")
+endif()
+
+FetchContent_Declare(
+    ctranslate2
+    GIT_REPOSITORY https://github.com/OpenNMT/CTranslate2.git
+    GIT_TAG        v4.5.0
+    GIT_SHALLOW    TRUE
+)
+FetchContent_MakeAvailable(ctranslate2)
 
 # ── Voice server executable ──────────────────────────────────────────────────
 add_executable(voice-server
@@ -101,14 +90,8 @@ add_executable(voice-server
     src/translator.cpp
 )
 
-target_include_directories(voice-server PRIVATE src)
-target_link_libraries(voice-server PRIVATE whisper)
-
-if(ENABLE_TRANSLATION)
-    target_link_libraries(voice-server PRIVATE ctranslate2 sentencepiece-static)
-    target_include_directories(voice-server PRIVATE ${sentencepiece_SOURCE_DIR}/src)
-    target_compile_definitions(voice-server PRIVATE HAS_TRANSLATION=1)
-endif()
+target_include_directories(voice-server PRIVATE src ${sentencepiece_SOURCE_DIR}/src)
+target_link_libraries(voice-server PRIVATE whisper ctranslate2 sentencepiece-static)
 
 if(WIN32)
     target_link_libraries(voice-server PRIVATE ws2_32)
@@ -148,8 +131,6 @@ if(APPLE)
 endif()
 
 # ── Copy shared libraries next to executables after build ────────────────────
-# On multi-config generators (MSVC) DLLs land in bin/<config>/ but the
-# executables land in <config>/.  Copy so the exe can find them at runtime.
 foreach(target voice-server test-client)
     add_custom_command(TARGET ${target} POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_directory

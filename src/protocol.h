@@ -10,7 +10,8 @@ std::string make_response(const std::string& speaker,
                           const std::string& locale,
                           const std::string& original,
                           const std::vector<std::string>& flagged_words,
-                          const std::string& redacted);
+                          const std::string& redacted,
+                          const std::string& english_translation = "");
 
 // Build a JSON error response: {"error":"<message>"}
 std::string make_error(const std::string& message);

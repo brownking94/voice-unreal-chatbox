@@ -9,6 +9,7 @@ struct whisper_context;
 struct TranscribeResult {
     std::string text;
     std::string detected_language;  // whisper language code (e.g. "en", "ja")
+    std::string english_translation; // Whisper translate mode output (empty if source is already English)
 };
 
 class Transcriber {

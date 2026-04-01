@@ -23,7 +23,8 @@ std::string make_response(const std::string& speaker,
                           const std::string& locale,
                           const std::string& original,
                           const std::vector<std::string>& flagged_words,
-                          const std::string& redacted) {
+                          const std::string& redacted,
+                          const std::string& english_translation) {
     std::string json = "{\"speaker\":\"" + json_escape(speaker) +
                        "\",\"locale\":\"" + json_escape(locale) +
                        "\",\"original\":\"" + json_escape(original) +
@@ -34,7 +35,13 @@ std::string make_response(const std::string& speaker,
         json += "\"" + json_escape(flagged_words[i]) + "\"";
     }
 
-    json += "],\"redacted\":\"" + json_escape(redacted) + "\"}";
+    json += "],\"redacted\":\"" + json_escape(redacted) + "\"";
+
+    if (!english_translation.empty()) {
+        json += ",\"english\":\"" + json_escape(english_translation) + "\"";
+    }
+
+    json += "}";
     return json;
 }
 

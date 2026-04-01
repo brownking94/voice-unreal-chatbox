@@ -399,6 +399,10 @@ static void print_usage(const char* prog) {
 }
 
 int main(int argc, char* argv[]) {
+#ifdef _WIN32
+    SetConsoleOutputCP(CP_UTF8);
+    SetConsoleCP(CP_UTF8);
+#endif
     std::string host = "127.0.0.1";
     uint16_t port = 9090;
     std::string locale = "en";
