@@ -109,13 +109,22 @@ int main(int argc, char* argv[]) {
         };
     }
 
-    // Handler: transcribe using client's language → filter → respond
+    // Handler: transcribe using client's language → validate → filter → respond
     Server server(port, [&pool, &filter](int client_id, const std::string& locale, const std::vector<uint8_t>& audio_data) -> std::string {
         std::string speaker = "Player" + std::to_string(client_id);
 
         TranscribeResult result = pool.transcribe(audio_data, locale);
         if (result.text.empty()) {
             return protocol::make_error("No speech detected");
+        }
+
+        // Drop if detected language doesn't match what the client claimed.
+        // This catches cases like selecting Japanese but speaking English —
+        // Whisper forced to Japanese would produce garbled output.
+        if (!result.detected_language.empty() && result.detected_language != locale) {
+            std::cout << "[" << speaker << "] Language mismatch: client says '" << locale
+                      << "' but detected '" << result.detected_language << "', dropping" << std::endl;
+            return protocol::make_error("Language mismatch: detected " + result.detected_language + ", expected " + locale);
         }
 
         FilterResult fr = filter.filter(result.text);
