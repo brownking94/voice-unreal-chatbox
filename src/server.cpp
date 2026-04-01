@@ -210,6 +210,11 @@ void Server::handle_client(socket_t client_sock, int client_id) {
         // Run transcription via the pool (thread-safe, borrows a model instance)
         std::string response = handler_(client_id, locale, audio);
 
+        // Empty response = silently dropped (e.g. language mismatch)
+        if (response.empty()) {
+            continue;
+        }
+
         // Send response back to sender: [4-byte length][JSON]
         uint32_t resp_len = static_cast<uint32_t>(response.size());
         uint8_t resp_hdr[4];

@@ -124,7 +124,7 @@ int main(int argc, char* argv[]) {
         if (!result.detected_language.empty() && result.detected_language != locale) {
             std::cout << "[" << speaker << "] Language mismatch: client says '" << locale
                       << "' but detected '" << result.detected_language << "', dropping" << std::endl;
-            return protocol::make_error("Language mismatch: detected " + result.detected_language + ", expected " + locale);
+            return "";
         }
 
         FilterResult fr = filter.filter(result.text);
