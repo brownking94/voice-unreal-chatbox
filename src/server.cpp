@@ -215,18 +215,33 @@ void Server::handle_client(socket_t client_sock, int client_id) {
             continue;
         }
 
+        // Strip internal "english" field before sending to sender
+        std::string sender_response = response;
+        {
+            std::string ekey = ",\"english\":\"";
+            auto epos = sender_response.find(ekey);
+            if (epos != std::string::npos) {
+                auto evalue_start = epos + ekey.size();
+                auto evalue_end = sender_response.find('"', evalue_start);
+                if (evalue_end != std::string::npos) {
+                    sender_response.erase(epos, evalue_end + 1 - epos);
+                }
+            }
+        }
+
         // Send response back to sender: [4-byte length][JSON]
-        uint32_t resp_len = static_cast<uint32_t>(response.size());
+        uint32_t resp_len = static_cast<uint32_t>(sender_response.size());
         uint8_t resp_hdr[4];
         write_u32_be(resp_hdr, resp_len);
 
         if (!send_all(client_sock, resp_hdr, 4) ||
-            !send_all(client_sock, response.data(), resp_len)) {
+            !send_all(client_sock, sender_response.data(), resp_len)) {
             std::cerr << "[server] Failed to send response" << std::endl;
             break;
         }
 
         // Broadcast to all other connected clients (with per-client translation)
+        // (response still has "english" field for translate handler to use)
         broadcast(client_id, response, locale);
     }
 

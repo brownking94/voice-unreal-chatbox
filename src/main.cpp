@@ -62,52 +62,64 @@ int main(int argc, char* argv[]) {
     auto translator = std::make_unique<Translator>(models_dir, "cuda");
 
     // Translation handler for broadcast
-    // For X→EN: uses Whisper's built-in translate (included in JSON as "english" field)
-    // For X→Y (non-English targets): falls back to Opus-MT
+    // Adds a "translated" field — never touches "redacted"
     TranslateHandler translate_handler = [&translator](
         const std::string& json_response,
         const std::string& source_lang,
         const std::string& target_lang) -> std::string {
 
+        std::string translated_text;
+
         if (target_lang == "en") {
-            // Use Whisper's high-quality translation if available
+            // Use Whisper's built-in translate if available (high quality)
             std::string key = "\"english\":\"";
             auto pos = json_response.find(key);
             if (pos != std::string::npos) {
                 auto value_start = pos + key.size();
                 auto value_end = json_response.find('"', value_start);
                 if (value_end != std::string::npos) {
-                    std::string english_text = json_response.substr(value_start, value_end - value_start);
-
-                    // Replace redacted field with english translation
-                    std::string rkey = "\"redacted\":\"";
-                    auto rpos = json_response.find(rkey);
-                    if (rpos != std::string::npos) {
-                        auto rvalue_start = rpos + rkey.size();
-                        auto rvalue_end = json_response.find('"', rvalue_start);
-                        if (rvalue_end != std::string::npos) {
-                            return json_response.substr(0, rvalue_start) + english_text + json_response.substr(rvalue_end);
-                        }
-                    }
+                    translated_text = json_response.substr(value_start, value_end - value_start);
                 }
             }
         }
 
-        // Fall back to Opus-MT for non-English targets (or if no whisper translation available)
-        if (translator && translator->is_loaded()) {
+        // Fall back to Opus-MT for non-English targets or if no Whisper translation
+        if (translated_text.empty() && translator && translator->is_loaded()) {
             std::string key = "\"redacted\":\"";
             auto pos = json_response.find(key);
-            if (pos == std::string::npos) return json_response;
-            auto value_start = pos + key.size();
-            auto value_end = json_response.find('"', value_start);
-            if (value_end == std::string::npos) return json_response;
-            std::string text = json_response.substr(value_start, value_end - value_start);
-
-            std::string translated = translator->translate(text, source_lang, target_lang);
-            return json_response.substr(0, value_start) + translated + json_response.substr(value_end);
+            if (pos != std::string::npos) {
+                auto value_start = pos + key.size();
+                auto value_end = json_response.find('"', value_start);
+                if (value_end != std::string::npos) {
+                    std::string text = json_response.substr(value_start, value_end - value_start);
+                    translated_text = translator->translate(text, source_lang, target_lang);
+                }
+            }
         }
 
-        return json_response;
+        if (translated_text.empty()) return json_response;
+
+        // Strip the internal "english" field and append "translated"
+        std::string out = json_response;
+
+        // Remove "english" field if present
+        std::string ekey = ",\"english\":\"";
+        auto epos = out.find(ekey);
+        if (epos != std::string::npos) {
+            auto evalue_start = epos + ekey.size();
+            auto evalue_end = out.find('"', evalue_start);
+            if (evalue_end != std::string::npos) {
+                out.erase(epos, evalue_end + 1 - epos);
+            }
+        }
+
+        // Insert "translated" before the closing }
+        auto close = out.rfind('}');
+        if (close != std::string::npos) {
+            out.insert(close, ",\"translated\":\"" + translated_text + "\"");
+        }
+
+        return out;
     };
 
     // Audio handler: transcribe → validate → filter → respond
