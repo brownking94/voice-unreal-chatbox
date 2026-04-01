@@ -98,7 +98,7 @@ Also add to `PublicIncludePaths`:
 
 class FSocket;
 
-DECLARE_DELEGATE_TwoParams(FOnTranscriptionReceived, const FString& /*Speaker*/, const FString& /*Text*/);
+DECLARE_DELEGATE_ThreeParams(FOnTranscriptionReceived, const FString& /*Speaker*/, const FString& /*Text*/, const FString& /*Translated*/);
 DECLARE_DELEGATE_OneParam(FOnWhisperError, const FString& /*ErrorMessage*/);
 
 /**
@@ -435,10 +435,12 @@ void UWhisperClient::HandleResponse(const FString& JsonString)
 
 	FString Speaker = JsonObject->GetStringField(TEXT("speaker"));
 	FString Redacted = JsonObject->GetStringField(TEXT("redacted"));
+	FString Translated;
+	JsonObject->TryGetStringField(TEXT("translated"), Translated);
 
-	AsyncTask(ENamedThreads::GameThread, [this, Speaker, Redacted]()
+	AsyncTask(ENamedThreads::GameThread, [this, Speaker, Redacted, Translated]()
 	{
-		OnTranscriptionReceived.ExecuteIfBound(Speaker, Redacted);
+		OnTranscriptionReceived.ExecuteIfBound(Speaker, Redacted, Translated);
 	});
 }
 ```
@@ -489,7 +491,7 @@ protected:
 private:
 	void StartRecording();
 	void StopRecording();
-	void OnTranscriptionReceived(const FString& Speaker, const FString& Text);
+	void OnTranscriptionReceived(const FString& Speaker, const FString& Text, const FString& Translated);
 	void OnError(const FString& ErrorMessage);
 	TArray<uint8> ConvertToServerFormat(const TArray<float>& FloatSamples, int32 NumChannels, int32 SourceSampleRate);
 
@@ -714,10 +716,10 @@ void UVoiceChatComponent::StopRecording()
 	if (PCMData.Num() > 0) WhisperClient->SendAudio(PCMData);
 }
 
-void UVoiceChatComponent::OnTranscriptionReceived(const FString& Speaker, const FString& Text)
+void UVoiceChatComponent::OnTranscriptionReceived(const FString& Speaker, const FString& Text, const FString& Translated)
 {
 	UE_LOG(LogTemp, Log, TEXT("VoiceChat: [%s] %s"), *Speaker, *Text);
-	if (ChatWidget) ChatWidget->AddMessage(Speaker, Text);
+	if (ChatWidget) ChatWidget->AddMessage(Speaker, Text, Translated);
 }
 
 void UVoiceChatComponent::OnError(const FString& ErrorMessage)
@@ -790,7 +792,7 @@ class UVoiceChatWidget : public UUserWidget
 	GENERATED_BODY()
 
 public:
-	void AddMessage(const FString& Speaker, const FString& Text);
+	void AddMessage(const FString& Speaker, const FString& Text, const FString& Translated = TEXT(""));
 	void SetRecording(bool bRecording);
 	void SetConnecting(bool bConnecting);
 	void ShowError(const FString& ErrorText);
@@ -871,7 +873,7 @@ TSharedRef<SWidget> UVoiceChatWidget::RebuildWidget()
 		];
 }
 
-void UVoiceChatWidget::AddMessage(const FString& Speaker, const FString& Text)
+void UVoiceChatWidget::AddMessage(const FString& Speaker, const FString& Text, const FString& Translated)
 {
 	if (!ChatLogBox.IsValid()) return;
 
@@ -883,15 +885,35 @@ void UVoiceChatWidget::AddMessage(const FString& Speaker, const FString& Text)
 
 	FString FormattedMsg = FString::Printf(TEXT("[%s]: %s"), *Speaker, *Text);
 
-	ChatLogBox->AddSlot()
-		.AutoHeight()
-		.Padding(FMargin(0.0f, 2.0f))
+	TSharedPtr<SVerticalBox> MsgBox = SNew(SVerticalBox)
+		+ SVerticalBox::Slot().AutoHeight()
 		[
 			SNew(STextBlock)
 			.Text(FText::FromString(FormattedMsg))
 			.ColorAndOpacity(FSlateColor(FLinearColor::White))
 			.Font(FCoreStyle::GetDefaultFontStyle("Regular", 12))
 			.AutoWrapText(true)
+		];
+
+	if (!Translated.IsEmpty())
+	{
+		MsgBox->AddSlot()
+			.AutoHeight()
+			.Padding(FMargin(20.0f, 1.0f, 0.0f, 0.0f))
+			[
+				SNew(STextBlock)
+				.Text(FText::FromString(Translated))
+				.ColorAndOpacity(FSlateColor(FLinearColor(0.7f, 0.7f, 0.7f)))
+				.Font(FCoreStyle::GetDefaultFontStyle("Italic", 11))
+				.AutoWrapText(true)
+			];
+	}
+
+	ChatLogBox->AddSlot()
+		.AutoHeight()
+		.Padding(FMargin(0.0f, 2.0f))
+		[
+			MsgBox.ToSharedRef()
 		];
 
 	MessageCount++;
