@@ -136,8 +136,8 @@ void Server::broadcast(int sender_id, const std::string& message, const std::str
         if (translate_handler_ && !info.locale.empty() && info.locale != source_lang) {
             msg_to_send = translate_handler_(message, source_lang, info.locale);
         } else {
-            // Same language — strip internal "english" field before sending
-            std::string ekey = ",\"english\":\"";
+            // Same language — strip internal "_english" field before sending
+            std::string ekey = ",\"_english\":\"";
             auto epos = msg_to_send.find(ekey);
             if (epos != std::string::npos) {
                 auto evalue_end = msg_to_send.find('"', epos + ekey.size());
@@ -225,10 +225,10 @@ void Server::handle_client(socket_t client_sock, int client_id) {
             continue;
         }
 
-        // Strip internal "english" field before sending to sender
+        // Strip internal "_english" field before sending to sender
         std::string sender_response = response;
         {
-            std::string ekey = ",\"english\":\"";
+            std::string ekey = ",\"_english\":\"";
             auto epos = sender_response.find(ekey);
             if (epos != std::string::npos) {
                 auto evalue_start = epos + ekey.size();
@@ -250,8 +250,7 @@ void Server::handle_client(socket_t client_sock, int client_id) {
             break;
         }
 
-        // Broadcast to all other connected clients (with per-client translation)
-        // (response still has "english" field for translate handler to use)
+        // Broadcast — response still has "_english" for translate handler
         broadcast(client_id, response, locale);
     }
 

@@ -4,7 +4,7 @@ Real-time voice-to-text chat for Unreal Engine with cross-language translation, 
 
 ## Overview
 
-Players speak into their mic inside an Unreal Engine game. Audio is sent to a local C++ server that transcribes it with whisper.cpp and broadcasts the text to all connected clients. When players speak different languages, Whisper's built-in translate mode produces an English translation directly from the audio — no separate translation models needed. The English translation is shown alongside the original text for cross-language listeners.
+Players speak into their mic inside an Unreal Engine game. Audio is sent to a local C++ server that transcribes it with whisper.cpp and broadcasts the text to all connected clients. When players speak different languages, Whisper's built-in translate mode produces an English translation directly from the audio. The server decides what each listener sees — original text for same-language listeners, English for everyone else.
 
 ## Architecture
 
@@ -14,7 +14,7 @@ Players speak into their mic inside an Unreal Engine game. Audio is sent to a lo
 │   Unreal Engine Client      │                            │   Voice Server (C++)     │
 │                             │  ◄───────────────────────  │                          │
 │  - Captures mic audio       │   JSON over TCP            │  - Whisper STT (GPU)     │
-│  - Sends audio to server    │                            │  - Whisper translate      │
+│  - Sends audio to server    │                            │  - Whisper translate     │
 │  - Displays text in chat UI │                            │  - Profanity filter      │
 │  - GTA V-style language     │                            │  - Broadcast to clients  │
 │    wheel (Ctrl+Shift+V)     │                            │                          │
@@ -23,16 +23,17 @@ Players speak into their mic inside an Unreal Engine game. Audio is sent to a lo
 
 ## How Translation Works
 
-Whisper has a built-in `translate` mode that converts speech in any supported language directly to English text. The server uses this instead of separate translation models:
+Whisper handles both transcription and translation in a single model. The server runs two passes on non-English audio:
 
 1. Player speaks in any language (Japanese, Hindi, Korean, etc.)
-2. Server runs Whisper **transcribe** → original text in speaker's language
-3. Server runs Whisper **translate** → English translation from the same audio
-4. Sender gets their original text back (profanity filtered)
-5. Same-language listeners get the original text
-6. Different-language listeners get the original + an English translation
+2. **Pass 1**: Whisper transcribe → original text in speaker's language
+3. **Pass 2**: Whisper translate → English translation from the same audio (skipped if already English)
+4. Profanity filter applied to original text
+5. Server broadcasts to all clients, picking the right text per listener:
+   - **Same language** → original text in speaker's language
+   - **Different language** → English translation
 
-This means any language → English works out of the box with high quality. English is used as the lingua franca for cross-language communication — no per-pair translation models needed.
+English speech is always accepted regardless of the client's locale setting, so bilingual players (e.g. Hindi + English) work naturally. Auto language detection means the server figures out what language was spoken — the client locale is only used for broadcast routing.
 
 ## Components
 
@@ -40,8 +41,9 @@ This means any language → English works out of the box with high quality. Engl
 
 - **Speech-to-text** via whisper.cpp with the multilingual `ggml-small` model (99 languages)
 - **Cross-language translation** via Whisper's translate mode (any language → English)
-- **Per-client locale tracking** — each client declares their language, server only translates when needed
-- **Language validation** — silently drops audio when detected language doesn't match client's locale
+- **Auto language detection** — Whisper detects the spoken language, no client hint needed
+- **Per-client locale routing** — each client declares their language, server sends the right text
+- **English always accepted** — bilingual speakers mixing in English phrases work naturally
 - **Profanity filter** — dictionary-based (~2,900 words), applied before broadcast
 - **Multi-client support** with thread-per-client model and transcriber pool
 - NVIDIA CUDA on Windows, Metal/Accelerate on macOS
@@ -49,17 +51,16 @@ This means any language → English works out of the box with high quality. Engl
 
 ### Test Client (Standalone C++)
 
-Standalone client for testing without Unreal Engine. Captures mic audio with automatic voice activity detection (VAD). Supports `--listen` for listen-only mode.
+Standalone client for testing without Unreal Engine. Captures mic audio with automatic voice activity detection (VAD). Supports `--listen` for listen-only mode (receives broadcasts without mic capture).
 
 ### Unreal Engine Client (Unreal C++)
 
 Pure C++ integration — no Blueprints. See [docs/unreal-integration.md](docs/unreal-integration.md) for full source.
 
 - **Push-to-talk** via Ctrl+V
-- **GTA V-style language wheel** via Ctrl+Shift+V
+- **GTA V-style language wheel** via Ctrl+Shift+V (20 languages)
 - **In-game chat widget** — semi-transparent Slate overlay with auto-scrolling
-- **Translation display** — original text in white, English translation indented below in gray
-- **UTF-8 support** — composite font with CJK, Devanagari, Arabic fallbacks
+- **UTF-8 support** — composite font with CJK, Devanagari, Arabic, Thai fallbacks
 
 ## Wire Protocol
 
@@ -68,29 +69,21 @@ Client → Server:  [1-byte locale length][locale string][4-byte BE audio length
 Server → Client:  [4-byte BE length][JSON response]
 ```
 
-A zero-length audio message is a locale update (no transcription).
+A zero-length audio message is a locale registration/update (no transcription).
 
-### JSON Responses
+### JSON Response
 
-Sender receives (own language, profanity filtered):
+The server sends a simple message with the appropriate text already chosen per listener:
+
 ```json
-{"speaker":"Player1","locale":"ja","original":"こんにちは","flagged_words":[],"redacted":"こんにちは"}
+{"speaker":"Player1","locale":"hi","text":"The enemy is over there."}
 ```
 
-Cross-language listener receives (with English translation):
-```json
-{"speaker":"Player1","locale":"ja","original":"こんにちは","flagged_words":[],"redacted":"こんにちは","translated":"Hello."}
-```
+- `speaker` — player ID
+- `locale` — detected language of the speech
+- `text` — the display text (original for same-language, English translation for others)
 
-Same-language listener receives (no translation):
-```json
-{"speaker":"Player1","locale":"ja","original":"こんにちは","flagged_words":[],"redacted":"こんにちは"}
-```
-
-Error:
-```json
-{"error":"No speech detected"}
-```
+No speech detected or empty audio is silently ignored (no response sent).
 
 ## Quick Start
 
@@ -157,7 +150,11 @@ build\test-client.exe -l en --listen
 build\test-client.exe -l ja --listen
 ```
 
-When the Hindi speaker talks, both listeners see the original Hindi text plus an English translation.
+When the Hindi speaker talks:
+- The Hindi listener sees the original Hindi text
+- The English and Japanese listeners see the English translation
+
+The Hindi speaker can also say something in English — it gets detected as English and sent to everyone as-is.
 
 To build without CUDA (CPU only):
 ```bash
@@ -178,9 +175,9 @@ cmake -B build -DENABLE_CUDA=OFF -DCMAKE_BUILD_TYPE=RelWithDebInfo
 ```
 ├── CMakeLists.txt               # Build config (fetches whisper.cpp + miniaudio)
 ├── src/
-│   ├── main.cpp                 # Server entry point + translation handler
-│   ├── server.h/cpp             # TCP server, broadcast with per-client translation
-│   ├── transcriber.h/cpp        # Whisper inference (transcribe + translate modes)
+│   ├── main.cpp                 # Server entry point + broadcast translation logic
+│   ├── server.h/cpp             # TCP server, per-client broadcast routing
+│   ├── transcriber.h/cpp        # Whisper inference (transcribe + translate passes)
 │   ├── transcriber_pool.h/cpp   # Thread-safe pool of transcriber instances
 │   ├── filter.h/cpp             # Profanity filter
 │   └── protocol.h/cpp           # JSON message formatting
@@ -204,9 +201,9 @@ cmake -B build -DENABLE_CUDA=OFF -DCMAKE_BUILD_TYPE=RelWithDebInfo
 
 ## Supported Languages
 
-Whisper supports 99 languages for transcription and any-to-English translation. The language wheel in the Unreal client shows 12 common languages:
+Whisper supports 99 languages for transcription and any-to-English translation. The language wheel in the Unreal client shows 20 languages:
 
-en, zh, es, hi, ar, pt, ja, ko, fr, de, ru, it
+en, zh, es, hi, ar, pt, ja, ko, fr, de, ru, it, nl, pl, tr, sv, th, vi, id, cs
 
 ## GPU Notes
 

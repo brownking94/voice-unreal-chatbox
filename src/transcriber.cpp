@@ -39,7 +39,7 @@ TranscribeResult Transcriber::transcribe(const std::vector<uint8_t>& pcm16_bytes
     params.print_realtime   = false;
     params.print_timestamps = false;
     params.single_segment   = false;
-    params.language         = language.c_str();
+    params.language         = "auto";
     params.n_threads        = 4;
 
     int ret = whisper_full(ctx_, params, pcm_f32.data(), static_cast<int>(pcm_f32.size()));
@@ -74,7 +74,7 @@ TranscribeResult Transcriber::transcribe(const std::vector<uint8_t>& pcm16_bytes
         tparams.print_realtime   = false;
         tparams.print_timestamps = false;
         tparams.single_segment   = false;
-        tparams.language         = language.c_str();
+        tparams.language         = detected.c_str();
         tparams.translate        = true;
         tparams.n_threads        = 4;
 
