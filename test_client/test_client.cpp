@@ -318,6 +318,15 @@ static int run_mic_mode(const std::string& host, uint16_t port, const std::strin
 
     std::cout << "Connected to server. Language: " << locale << std::endl;
 
+    // Register locale with the server (locale + zero-length audio)
+    {
+        uint8_t loc_len = static_cast<uint8_t>(locale.size());
+        uint8_t zero_audio[4] = {0, 0, 0, 0};
+        send_all(sock, &loc_len, 1);
+        send_all(sock, locale.data(), loc_len);
+        send_all(sock, zero_audio, 4);
+    }
+
     MicState mic_state;
 
     ma_device_config config = ma_device_config_init(ma_device_type_capture);

@@ -91,7 +91,7 @@ int main(int argc, char* argv[]) {
             return protocol::make_error("No speech detected");
         }
 
-        if (!result.detected_language.empty() && result.detected_language != locale) {
+        if (!result.detected_language.empty() && result.detected_language != locale && result.detected_language != "en") {
             std::cout << "[" << speaker << "] Language mismatch: client says '" << locale
                       << "' but detected '" << result.detected_language << "', dropping" << std::endl;
             return "";
