@@ -1,4 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
+set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
 project(unreal-voice-server LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
@@ -45,6 +46,50 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(miniaudio)
 
+# ── SentencePiece (tokenizer for NLLB translation) ──────────────────────────
+option(ENABLE_TRANSLATION "Enable NLLB translation via CTranslate2" ON)
+
+if(ENABLE_TRANSLATION)
+    set(SPM_ENABLE_SHARED OFF CACHE BOOL "" FORCE)
+    set(SPM_ENABLE_TCMALLOC OFF CACHE BOOL "" FORCE)
+
+    FetchContent_Declare(
+        sentencepiece
+        GIT_REPOSITORY https://github.com/google/sentencepiece.git
+        GIT_TAG        v0.2.0
+        GIT_SHALLOW    TRUE
+    )
+    FetchContent_MakeAvailable(sentencepiece)
+
+    # ── CTranslate2 (neural machine translation inference) ───────────────────
+    set(WITH_MKL OFF CACHE BOOL "" FORCE)
+    set(OPENMP_RUNTIME "NONE" CACHE STRING "" FORCE)
+    set(BUILD_CLI OFF CACHE BOOL "" FORCE)
+
+    if(ENABLE_CUDA)
+        set(WITH_CUDA ON CACHE BOOL "" FORCE)
+        set(WITH_CUDNN OFF CACHE BOOL "" FORCE)
+    else()
+        set(WITH_CUDA OFF CACHE BOOL "" FORCE)
+    endif()
+
+    # /FS allows parallel CUDA compiles to share PDB files (avoids C1041).
+    # Must be in CMAKE_CXX_FLAGS so CTranslate2's generated CUDA→cpp intermediates inherit it.
+    if(MSVC)
+        set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} /FS")
+        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /FS")
+        set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -Xcompiler=/FS")
+    endif()
+
+    FetchContent_Declare(
+        ctranslate2
+        GIT_REPOSITORY https://github.com/OpenNMT/CTranslate2.git
+        GIT_TAG        v4.5.0
+        GIT_SHALLOW    TRUE
+    )
+    FetchContent_MakeAvailable(ctranslate2)
+endif()
+
 # ── Voice server executable ──────────────────────────────────────────────────
 add_executable(voice-server
     src/main.cpp
@@ -53,10 +98,17 @@ add_executable(voice-server
     src/transcriber_pool.cpp
     src/filter.cpp
     src/protocol.cpp
+    src/translator.cpp
 )
 
 target_include_directories(voice-server PRIVATE src)
 target_link_libraries(voice-server PRIVATE whisper)
+
+if(ENABLE_TRANSLATION)
+    target_link_libraries(voice-server PRIVATE ctranslate2 sentencepiece-static)
+    target_include_directories(voice-server PRIVATE ${sentencepiece_SOURCE_DIR}/src)
+    target_compile_definitions(voice-server PRIVATE HAS_TRANSLATION=1)
+endif()
 
 if(WIN32)
     target_link_libraries(voice-server PRIVATE ws2_32)

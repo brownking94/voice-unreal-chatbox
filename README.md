@@ -1,10 +1,10 @@
 # Voice-to-Chat Prototype
 
-Real-time voice-to-text chat for Unreal Engine, powered by a local Whisper transcription server running on a gaming laptop.
+Real-time voice-to-text chat for Unreal Engine with live translation, powered by a local Whisper + NLLB transcription server running on a gaming laptop.
 
 ## Overview
 
-This prototype captures a player's voice inside an Unreal Engine open world demo, sends the audio to a local transcription server built with whisper.cpp, and displays the transcribed text in an in-game chat widget. No cloud services — just local speech-to-text supporting 99 languages, running entirely on-device.
+This prototype captures a player's voice inside an Unreal Engine open world demo, sends the audio to a local transcription server built with whisper.cpp, and displays the transcribed text in an in-game chat widget. When multiple players speak different languages, the server translates each message into every other player's language using NLLB-200 before broadcasting. No cloud services — just local speech-to-text and translation running entirely on-device.
 
 ## Architecture
 
@@ -13,40 +13,81 @@ The system is two separate processes communicating over a local TCP socket.
 ```
 ┌─────────────────────────────┐       audio chunks        ┌──────────────────────────┐
 │                             │  ───────────────────────►  │                          │
-│   Unreal Engine Client      │                            │   Whisper Server (C++)   │
+│   Unreal Engine Client      │                            │   Voice Server (C++)     │
 │                             │  ◄───────────────────────  │                          │
-│  - Captures mic audio       │     transcribed text       │  - Receives audio data   │
-│  - Sends audio to server    │      (JSON over TCP)       │  - Runs Whisper inference │
-│  - Displays text in chat UI │                            │  - Returns transcription  │
-│                             │                            │                          │
+│  - Captures mic audio       │   translated text          │  - Whisper STT           │
+│  - Sends audio to server    │   (JSON over TCP)          │  - NLLB-200 translation  │
+│  - Displays text in chat UI │                            │  - Profanity filter      │
+│  - GTA V-style language     │                            │  - Broadcast to clients  │
+│    wheel (Ctrl+Shift+V)     │                            │                          │
 └─────────────────────────────┘                            └──────────────────────────┘
 ```
 
 ## Components
 
-### Whisper Transcription Server (Standalone C++)
+### Voice Server (Standalone C++)
 
-A lightweight local server built with standard C++ and whisper.cpp. It has no dependency on Unreal Engine.
+A local server built with standard C++ that handles the full voice-to-translated-text pipeline.
 
 - Listens on a local TCP socket for incoming audio data
-- Runs Whisper inference using the multilingual `ggml-small` model (99 languages, configurable)
-- Returns transcribed text as JSON (e.g. `{"speaker": "Player1", "text": "anyone see that dragon?"}`)
+- **Speech-to-text** via whisper.cpp using the multilingual `ggml-small` model (99 languages)
+- **Auto language detection** — Whisper runs with `auto` detect, then validates against English + the client's secondary language. If the detected language doesn't match either, re-runs as English
+- **Live translation** via NLLB-200 (CTranslate2 + SentencePiece). When broadcasting to other clients, the server translates the transcription into each receiver's language. If source and target language match, no translation is performed
+- **Profanity filter** — dictionary-based, applied before broadcast
 - **Multi-client support** with a thread-per-client model and a transcriber pool for parallel inference
-- Uses Metal/Accelerate on macOS, NVIDIA CUDA on Windows (falls back to CPU)
-- Cross-platform: macOS and Windows
+- Uses NVIDIA CUDA on Windows (falls back to CPU), Metal/Accelerate on macOS
+- All flags have sensible defaults — server runs with zero configuration
 
 ### Test Client (Standalone C++)
 
 A standalone client for testing the server without Unreal Engine. Captures live audio from the microphone with automatic voice activity detection (VAD). Detects when you start and stop speaking, then sends the audio chunk to the server automatically. Supports a `--listen` flag for listen-only mode (receives broadcasts without capturing mic).
 
-### Unreal Engine Client (Unreal C++ / Blueprints) — not yet implemented
+### Unreal Engine Client (Unreal C++)
 
-A thin integration layer added on top of an existing open world demo project. No modifications to the base game.
+A pure C++ integration layer added on top of an existing Unreal Engine project. No Blueprints required.
 
-- Captures microphone input using Unreal's built-in audio capture (e.g. `UAudioCaptureComponent`)
-- Streams raw audio chunks to the Whisper server over TCP
-- Receives transcribed text back from the server
-- Displays text in a UMG chat widget overlaid on the game HUD
+- **Push-to-talk** via Ctrl+V
+- **GTA V-style language wheel** via Ctrl+Shift+V — radial selector with 12 languages, mouse scroll to pick, left-click to confirm, right-click to dismiss
+- **TCP connection** to the voice server on port 9090
+- **Stateless locale protocol** — sends secondary language with every audio message (English is always on)
+- **Broadcast support** — receives translated transcriptions from all connected clients
+- **In-game chat widget** — semi-transparent Slate overlay at bottom-left, auto-scrolling, recording indicator
+- **Proper UTF-8 handling** — supports CJK and other non-Latin scripts in the chat display
+
+## Language Detection & Translation
+
+The server uses a dual-language approach: **English is always on**, and players set a secondary language.
+
+1. Player speaks → audio sent to server with their secondary language code
+2. Server runs Whisper with `auto` language detection
+3. If detected language is English or the player's secondary language → accepted
+4. If detected language is something else → re-run forced as English
+5. On broadcast, the server translates the text into each receiver's secondary language
+6. If source language matches the receiver's language → sent as-is (no translation)
+
+This means:
+- English speakers who never touch the language wheel get perfect behavior
+- Bilingual players set their second language once and speak naturally in either
+- A Japanese player speaking Japanese gets their message translated to English for English-speaking players, and vice versa
+
+### Supported Languages (Language Wheel)
+
+| Code | Language | NLLB Code |
+|------|----------|-----------|
+| `en` | English | `eng_Latn` |
+| `zh` | Chinese | `zho_Hans` |
+| `es` | Spanish | `spa_Latn` |
+| `hi` | Hindi | `hin_Deva` |
+| `ar` | Arabic | `arb_Arab` |
+| `pt` | Portuguese | `por_Latn` |
+| `ja` | Japanese | `jpn_Jpan` |
+| `ko` | Korean | `kor_Hang` |
+| `fr` | French | `fra_Latn` |
+| `de` | German | `deu_Latn` |
+| `ru` | Russian | `rus_Cyrl` |
+| `it` | Italian | `ita_Latn` |
+
+Whisper supports 99 languages for STT. NLLB-200 supports 200 languages for translation. The language wheel shows the 12 most common; the server can handle any language pair NLLB supports.
 
 ## Voice Activity Detection (VAD)
 
@@ -76,11 +117,6 @@ The server supports multiple simultaneous clients. Each client connection is han
 | 2 (default) | ~2.0 GB | 2 concurrent |
 | 4 | ~4.0 GB | 4 concurrent |
 
-Override at launch:
-```bash
-make run-server WORKERS=4
-```
-
 ## Profanity Filter
 
 Transcribed text is run through a profanity filter before being returned to the client. The filter uses a dictionary-based approach with a configurable word list.
@@ -106,49 +142,21 @@ Sources:
 - [web-mech/badwords](https://github.com/web-mech/badwords) — npm bad-words package (~450 words)
 - [better_profanity](https://github.com/snguyenthanh/better_profanity) — Python profanity library (~800 words)
 
-To add a new source, edit the `SOURCES` array in `scripts/update-profanity.sh`.
-
-Custom word list path:
-```bash
-make run-server FILTER_PATH=config/my-custom-list.txt
-```
-
-### Moderation pipeline
-
-When `flagged_words` is non-empty, the event can be forwarded to a separate moderation service for further action. This keeps the voice server fast (filter and respond immediately) while offloading enforcement decisions to a dedicated system.
-
-```
-audio → transcribe → filter → respond to client (redacted text)
-                        │
-                        └──► if flagged_words not empty:
-                                push to moderation queue
-                                    │
-                                    ▼
-                              moderation service
-                              - track per-player flag frequency
-                              - issue warnings after N flags
-                              - temporary mute after repeated offenses
-                              - escalate to human review if needed
-                              - log original text for audit trail
-```
-
-This is not yet implemented but the response format is designed to support it — the `flagged_words` array gives downstream services exactly what they need to decide on an action without re-parsing the text.
-
 ## Wire Protocol
 
-Stateless, length-prefixed messages over TCP. Each audio message includes the client's locale so the server requires no per-client state.
+Stateless, length-prefixed messages over TCP. Each audio message includes the client's secondary language so the server requires no per-client state for STT. The server tracks each client's locale for translation routing.
 
 ```
-Client → Server:  [1-byte locale length][locale string, e.g. "en"][4-byte big-endian uint32 audio length][raw 16-bit PCM audio, 16 kHz mono]
+Client → Server:  [1-byte locale length][locale string, e.g. "ja"][4-byte big-endian uint32 audio length][raw 16-bit PCM audio, 16 kHz mono]
 Server → Client:  [4-byte big-endian uint32 length][JSON response]
 ```
 
-The locale is a whisper language code (e.g. `en`, `ja`, `ko`, `zh`, `auto`). It is sent with every audio chunk, allowing the server to remain completely stateless — no per-client session tracking needed.
+The locale represents the client's **secondary language** (English is always on). It is sent with every audio chunk. A zero-length audio message is a registration/locale update — the server updates the client's stored language for translation routing.
 
-JSON responses (speaker is assigned per client connection, locale is the sender's language):
+JSON responses:
 ```json
 {"speaker":"Player1","locale":"en","original":" anyone see that dragon?","flagged_words":[],"redacted":" anyone see that dragon?"}
-{"speaker":"Player2","locale":"en","original":" what the fuck is that","flagged_words":["fuck"],"redacted":" what the **** is that"}
+{"speaker":"Player2","locale":"ja","original":" あのドラゴン見た？","flagged_words":[],"redacted":" あのドラゴン見た？"}
 {"error":"No speech detected"}
 ```
 
@@ -162,25 +170,9 @@ JSON responses (speaker is assigned per client connection, locale is the sender'
   - **Windows**: Visual Studio 2022+ with "Desktop development with C++" workload
   - **macOS**: Xcode command line tools (`xcode-select --install`)
 - **NVIDIA CUDA Toolkit 13.2+** (Windows only, optional): [developer.nvidia.com/cuda-downloads](https://developer.nvidia.com/cuda-downloads). Required for GPU-accelerated inference. Without it, falls back to CPU (too slow for real-time use)
-- **NVIDIA driver**: Must support CUDA 13.2+. Run `nvidia-smi` to check — the "CUDA Version" in the top-right must be >= 13.2. Update to the latest Game Ready or Studio driver if needed. Both Game Ready and Studio drivers work
+- **NVIDIA driver**: Must support CUDA 13.2+. Run `nvidia-smi` to check — the "CUDA Version" in the top-right must be >= 13.2. Update to the latest Game Ready or Studio driver if needed
 
 ### Build and Run
-
-#### macOS (Make)
-
-```bash
-# Build everything (fetches whisper.cpp and miniaudio automatically)
-make build
-
-# Download the multilingual whisper model (~466 MB, only needed once)
-make model
-
-# Start the server (auto-downloads model if missing)
-make run-server
-
-# In another terminal — start the mic client
-make run-client
-```
 
 #### Windows (CMake + CUDA)
 
@@ -194,107 +186,102 @@ nvidia-smi
 git clone https://github.com/brownking94/voice-unreal-chatbox.git
 cd voice-unreal-chatbox
 
-# 3. Configure — only needed once, or after editing CMakeLists.txt
-#    CUDA is enabled by default when NVIDIA CUDA Toolkit is installed
-cmake -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo
+# 3. Configure and build (first build takes 15-20 min — CUDA kernels for whisper + CTranslate2)
+cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_C_COMPILER=cl -DCMAKE_CXX_COMPILER=cl
+cmake --build build --config RelWithDebInfo --parallel
 
-# 4. Build — first build takes 10-15 min (compiling CUDA kernels)
-#    Subsequent builds are incremental and only recompile changed files
-cmake --build build --config RelWithDebInfo
-
-# 5. Download the multilingual whisper model (~466 MB, only needed once)
-mkdir models
+# 4. Download models (only needed once)
+#    Whisper STT model (~466 MB)
 curl -L -o models/ggml-small.bin https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin
 
-# 6. Start the server
-build\RelWithDebInfo\voice-server.exe -m models/ggml-small.bin -p 9090 -w 2 -f config/profanity.txt
+#    NLLB-200 translation model (~2.4 GB total)
+mkdir models\nllb-200-distilled-600M
+curl -L -o models/nllb-200-distilled-600M/model.bin https://huggingface.co/entai2965/nllb-200-distilled-600M-ctranslate2/resolve/main/model.bin
+curl -L -o models/nllb-200-distilled-600M/config.json https://huggingface.co/entai2965/nllb-200-distilled-600M-ctranslate2/resolve/main/config.json
+curl -L -o models/nllb-200-distilled-600M/shared_vocabulary.json https://huggingface.co/entai2965/nllb-200-distilled-600M-ctranslate2/resolve/main/shared_vocabulary.json
+curl -L -o models/nllb-200-distilled-600M/sentencepiece.bpe.model https://huggingface.co/entai2965/nllb-200-distilled-600M-ctranslate2/resolve/main/sentencepiece.bpe.model
 
-# 7. In another terminal — start the mic client (English)
-build\RelWithDebInfo\test-client.exe -p 9090 -l en
+# 5. Start the server (all defaults — STT + translation + filter)
+build\voice-server.exe
 
-# 8. Verify GPU is being used (should show ~1500 MiB allocated)
+# 6. In another terminal — start the mic client
+build\test-client.exe -l ja
+
+# 7. Verify GPU is being used (should show ~2-3 GB allocated)
 nvidia-smi
+```
+
+#### macOS (Make)
+
+```bash
+make build
+make model
+make run-server
+# In another terminal:
+make run-client
+```
+
+#### Server options
+
+All flags are optional — sensible defaults are built in:
+
+```
+build\voice-server.exe [options]
+
+  -m <path>    Whisper model (default: models/ggml-small.bin)
+  -p <port>    TCP port (default: 9090)
+  -w <workers> Parallel transcription instances (default: 2)
+  -f <path>    Profanity word list (default: config/profanity.txt)
+  -t <path>    NLLB translation model dir (default: models/nllb-200-distilled-600M)
+  -s <path>    SentencePiece tokenizer (default: models/nllb-200-distilled-600M/sentencepiece.bpe.model)
 ```
 
 #### Testing broadcast with multiple clients
 
-The server broadcasts transcriptions to all connected clients. To test with one mic:
-
 ```bash
 # Terminal 1 — server
-build\RelWithDebInfo\voice-server.exe -m models/ggml-small.bin -p 9090 -w 2 -f config/profanity.txt
+build\voice-server.exe
 
-# Terminal 2 — speaking client (captures mic, sends audio)
-build\RelWithDebInfo\test-client.exe -p 9090 -l en
+# Terminal 2 — English speaker with Japanese as secondary
+build\test-client.exe -l ja
 
-# Terminal 3 — listen-only client (receives broadcasts, no mic capture)
-build\RelWithDebInfo\test-client.exe -p 9090 -l ja --listen
+# Terminal 3 — Japanese listener
+build\test-client.exe -l ja --listen
 ```
 
-When you speak in Terminal 2, both Terminal 2 and Terminal 3 display the transcription. The listen-only client registers its locale with the server (for future translation routing) but never captures audio.
+When you speak English in Terminal 2, Terminal 3 receives the Japanese translation. When you speak Japanese, Terminal 2 receives the English translation.
 
-To build without CUDA (CPU only), pass `-DENABLE_CUDA=OFF` during configure:
+To build without CUDA (CPU only):
 ```bash
 cmake -B build -DENABLE_CUDA=OFF -DCMAKE_BUILD_TYPE=RelWithDebInfo
-cmake --build build --config RelWithDebInfo
+```
+
+To build without translation:
+```bash
+cmake -B build -DENABLE_TRANSLATION=OFF -DCMAKE_BUILD_TYPE=RelWithDebInfo
 ```
 
 > **Note:** Avoid deleting the `build/` directory unless necessary — CUDA kernel compilation is slow. Incremental builds only recompile what changed.
 
-Shared libraries (ggml, whisper, ggml-cuda, etc.) are automatically copied next to the executables after each build.
+### VRAM Budget (RTX 5070 8 GB)
 
-### Available Whisper Models
-
-**Multilingual models** (99 languages — recommended):
-
-| Model | Size | Quality | Languages | `MODEL_PATH` |
-|-------|------|---------|-----------|-------------|
-| `tiny` | ~75 MB | Basic | 99 | `models/ggml-tiny.bin` |
-| `base` | ~142 MB | Good | 99 | `models/ggml-base.bin` |
-| **`small`** | **~466 MB** | **Great (default)** | **99** | **`models/ggml-small.bin`** |
-| `medium` | ~1.5 GB | Excellent | 99 | `models/ggml-medium.bin` |
-| `large-v3` | ~3 GB | Best | 99 | `models/ggml-large-v3.bin` |
-
-**English-only models** (slightly better WER for English):
-
-| Model | Size | Quality | `MODEL_PATH` |
-|-------|------|---------|-------------|
-| `small.en` | ~466 MB | Great | `models/ggml-small.en.bin` |
-| `medium.en` | ~1.5 GB | Excellent | `models/ggml-medium.en.bin` |
-
-**NVIDIA GPU estimates** (for a ~5s audio clip with CUDA):
-
-| Model | RTX 3060 | RTX 3080 | RTX 4090 |
-|-------|----------|----------|----------|
-| `tiny.en` | ~0.1s | ~0.05s | ~0.03s |
-| `base.en` | ~0.2s | ~0.1s | ~0.05s |
-| `small.en` | ~0.5s | ~0.3s | ~0.15s |
-| `medium.en` | ~1.5s | ~0.8s | ~0.4s |
-| `large-v3` | ~4s | ~2s | ~1s |
-
-Total latency = VAD silence timeout (700ms) + inference + network (<1ms localhost) + filter (<1ms).
-Inference time scales roughly linearly with audio length. Expect 2-3x slower on CPU-only compared to GPU.
-
-Download any model with:
-```bash
-curl -L -o models/<model_file> https://huggingface.co/ggerganov/whisper.cpp/resolve/main/<model_file>
-```
-
-Override the default model:
-```bash
-make run-server MODEL_PATH=models/ggml-medium.bin
-```
+| Component | VRAM |
+|-----------|------|
+| Whisper small (x2 workers) | ~2.0 GB |
+| NLLB-200-distilled-600M | ~0.6 GB |
+| **Total** | **~2.6 GB** |
 
 ### Project Structure
 
 ```
-├── CMakeLists.txt               # Build config (fetches whisper.cpp + miniaudio)
-├── Makefile                     # Convenience targets for build/run
+├── CMakeLists.txt               # Build config (fetches whisper.cpp, CTranslate2, SentencePiece, miniaudio)
+├── Makefile                     # Convenience targets for build/run (macOS)
 ├── src/
 │   ├── main.cpp                 # Server entry point
-│   ├── server.h/cpp             # Cross-platform TCP socket server
-│   ├── transcriber.h/cpp        # Whisper inference wrapper
+│   ├── server.h/cpp             # Cross-platform TCP socket server + broadcast with translation
+│   ├── transcriber.h/cpp        # Whisper inference wrapper (returns text + detected language)
 │   ├── transcriber_pool.h/cpp   # Thread-safe pool of transcriber instances
+│   ├── translator.h/cpp         # NLLB-200 translation via CTranslate2 + SentencePiece
 │   ├── filter.h/cpp             # Profanity filter (dictionary-based)
 │   └── protocol.h/cpp           # JSON message formatting
 ├── config/
@@ -303,7 +290,14 @@ make run-server MODEL_PATH=models/ggml-medium.bin
 │   └── update-profanity.sh      # Fetches & merges word lists from multiple repos
 ├── test_client/
 │   └── test_client.cpp          # Test client (live mic with VAD)
-└── models/                      # Whisper model files (gitignored)
+├── tests/
+│   ├── test_protocol.cpp        # JSON protocol unit tests
+│   ├── test_filter.cpp          # Profanity filter unit tests
+│   ├── test_wire_protocol.cpp   # Wire format unit tests
+│   └── test_translator.cpp      # NLLB locale mapping tests
+└── models/                      # Model files (gitignored)
+    ├── ggml-small.bin           # Whisper STT model
+    └── nllb-200-distilled-600M/ # NLLB translation model
 ```
 
 ## GPU Notes
@@ -318,32 +312,24 @@ make run-server MODEL_PATH=models/ggml-medium.bin
 Run `nvidia-smi` after starting the server:
 
 ```
-nvidia-smi
-```
-
-You should see GPU memory allocated by the server even before any client connects (the model is loaded at startup):
-
-```
-|   0  NVIDIA GeForce RTX 5070 ...  |   1518MiB /   8151MiB |      0%      Default |
+|   0  NVIDIA GeForce RTX 5070 ...  |   2600MiB /   8151MiB |      0%      Default |
 ```
 
 If GPU memory shows **0 MiB** with the server running, CUDA is not working. Common causes:
 1. **Driver too old** — run `nvidia-smi` and check "CUDA Version" in the top-right is >= 13.2
-2. **Missing ggml-cuda.dll** — verify it exists next to the executable in `build/RelWithDebInfo/`
+2. **Missing DLLs** — verify ggml-cuda.dll and ctranslate2.dll exist next to the executable
 3. **Wrong CUDA architecture** — rebuild after checking CMakeLists.txt targets a compatible sm version
 
 ## Scope and Constraints
 
-- **Language:** 99 languages for speech-to-text (translation not yet implemented)
-- **Deployment:** Runs locally on a single machine (Apple Silicon or RTX 3060+ recommended)
-- **Game project:** Any Unreal Engine open world demo — the chat system is game-agnostic
+- **Language:** 99 languages for speech-to-text, 200 languages for translation
+- **Deployment:** Runs locally on a single machine (RTX 3060+ recommended for GPU acceleration)
+- **Game project:** Any Unreal Engine project — the chat system is game-agnostic
 - **Goal:** Working prototype, not production quality
 
 ## Future Considerations
 
-These are out of scope for the prototype but worth noting for later iterations.
-
-- Multi-language translation using NLLB-200 (200 languages, ~1.2 GB) as a second processing stage after STT
-- Speaker identification (currently all transcriptions are labeled "Player1")
+- Speaker identification (currently all transcriptions are labeled "Player1", "Player2", etc.)
 - Streaming / partial transcription display (text appears word by word)
-- Packaging the Whisper server as a DLL loaded directly by Unreal instead of a separate process
+- Packaging the voice server as a DLL loaded directly by Unreal instead of a separate process
+- Translation quality tuning for game-specific vocabulary

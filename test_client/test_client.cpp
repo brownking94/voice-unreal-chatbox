@@ -253,7 +253,7 @@ static int run_listen_mode(const std::string& host, uint16_t port, const std::st
         return 1;
     }
 
-    std::cout << "Connected (listen-only). Locale: " << locale << std::endl;
+    std::cout << "Connected (listen-only). English + secondary: " << locale << std::endl;
 
     // Send registration: locale + zero-length audio
     uint8_t loc_len = static_cast<uint8_t>(locale.size());
@@ -316,7 +316,7 @@ static int run_mic_mode(const std::string& host, uint16_t port, const std::strin
         return 1;
     }
 
-    std::cout << "Connected to server. Locale: " << locale << std::endl;
+    std::cout << "Connected to server. English + secondary: " << locale << std::endl;
 
     MicState mic_state;
 
@@ -394,7 +394,7 @@ static void print_usage(const char* prog) {
     std::cerr << "Options:" << std::endl;
     std::cerr << "  -s <host>    Server host (default: 127.0.0.1)" << std::endl;
     std::cerr << "  -p <port>    Server port (default: 9090)" << std::endl;
-    std::cerr << "  -l <locale>  Language code for STT, e.g. en, ja, auto (default: en)" << std::endl;
+    std::cerr << "  -l <locale>  Secondary language code (English is always on). e.g. ja, ko, zh (default: en)" << std::endl;
     std::cerr << "  --listen     Listen-only mode: receive broadcasts without capturing mic" << std::endl;
 }
 

@@ -30,6 +30,10 @@
 // Must be thread-safe — called from multiple client threads concurrently.
 using AudioHandler = std::function<std::string(int client_id, const std::string& locale, const std::vector<uint8_t>& audio_data)>;
 
+// Callback: translates a JSON response for a specific receiver locale.
+// Takes the original JSON, the detected source language, and the target locale. Returns translated JSON.
+using TranslateHandler = std::function<std::string(const std::string& json_response, const std::string& source_lang, const std::string& target_lang)>;
+
 struct ClientInfo {
     socket_t    sock;
     std::string locale;
@@ -37,7 +41,7 @@ struct ClientInfo {
 
 class Server {
 public:
-    Server(uint16_t port, AudioHandler handler);
+    Server(uint16_t port, AudioHandler handler, TranslateHandler translate_handler = nullptr);
     ~Server();
 
     // Blocks, listening for connections until stop() is called
@@ -48,12 +52,13 @@ private:
     void handle_client(socket_t client_sock, int client_id);
     void register_client(int client_id, socket_t sock, const std::string& locale);
     void unregister_client(int client_id);
-    void broadcast(int sender_id, const std::string& message);
+    void broadcast(int sender_id, const std::string& message, const std::string& source_lang);
     bool recv_all(socket_t sock, void* buf, size_t len);
     bool send_all(socket_t sock, const void* buf, size_t len);
 
     uint16_t          port_;
     AudioHandler      handler_;
+    TranslateHandler  translate_handler_;
     socket_t          listen_sock_ = SOCKET_INVALID;
     std::atomic<bool> running_{false};
     std::atomic<int>  client_count_{0};

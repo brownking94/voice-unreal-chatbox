@@ -42,8 +42,8 @@ static void write_u32_be(uint8_t* p, uint32_t v) {
 
 // ── Server implementation ───────────────────────────────────────────────────
 
-Server::Server(uint16_t port, AudioHandler handler)
-    : port_(port), handler_(std::move(handler)) {
+Server::Server(uint16_t port, AudioHandler handler, TranslateHandler translate_handler)
+    : port_(port), handler_(std::move(handler)), translate_handler_(std::move(translate_handler)) {
     platform_init();
 }
 
@@ -126,17 +126,28 @@ void Server::unregister_client(int client_id) {
     std::cout << "[server] Unregistered Client #" << client_id << std::endl;
 }
 
-void Server::broadcast(int sender_id, const std::string& message) {
-    uint32_t msg_len = static_cast<uint32_t>(message.size());
-    uint8_t hdr[4];
-    write_u32_be(hdr, msg_len);
-
+void Server::broadcast(int sender_id, const std::string& message, const std::string& source_lang) {
     std::lock_guard<std::mutex> lock(clients_mtx_);
     for (auto& [id, info] : clients_) {
         if (id == sender_id) continue;  // Don't echo back to sender
-        // Best-effort send — if a client is slow, skip it
+
+        // Translate if the receiver's locale differs from the source language
+        std::string msg_to_send = message;
+        if (translate_handler_ && !info.locale.empty() &&
+            info.locale != source_lang && info.locale != "en") {
+            // Translate into receiver's language
+            msg_to_send = translate_handler_(message, source_lang, info.locale);
+        } else if (translate_handler_ && info.locale == "en" && source_lang != "en") {
+            // Receiver wants English, source is foreign — translate to English
+            msg_to_send = translate_handler_(message, source_lang, "en");
+        }
+
+        uint32_t msg_len = static_cast<uint32_t>(msg_to_send.size());
+        uint8_t hdr[4];
+        write_u32_be(hdr, msg_len);
+
         if (!send_all(info.sock, hdr, 4) ||
-            !send_all(info.sock, message.data(), msg_len)) {
+            !send_all(info.sock, msg_to_send.data(), msg_len)) {
             std::cerr << "[server] Failed to broadcast to Client #" << id << std::endl;
         }
     }
@@ -165,7 +176,11 @@ void Server::handle_client(socket_t client_sock, int client_id) {
         // Update locale in registry (in case client changes language mid-session)
         {
             std::lock_guard<std::mutex> lock(clients_mtx_);
-            clients_[client_id].locale = locale;
+            std::string& stored_locale = clients_[client_id].locale;
+            if (stored_locale != locale) {
+                std::cout << "[server] Client #" << client_id << " updated locale: " << stored_locale << " -> " << locale << std::endl;
+                stored_locale = locale;
+            }
         }
 
         // Read 4-byte audio length header
@@ -176,9 +191,9 @@ void Server::handle_client(socket_t client_sock, int client_id) {
 
         uint32_t payload_len = read_u32_be(len_buf);
 
-        // Zero-length audio = registration only (listen-only client)
+        // Zero-length audio = registration/locale update only
         if (payload_len == 0) {
-            std::cout << "[server] Client #" << client_id << " (" << locale << ") registered as listener" << std::endl;
+            std::cout << "[server] Client #" << client_id << " (" << locale << ") sent locale update" << std::endl;
             continue;
         }
 
@@ -211,8 +226,8 @@ void Server::handle_client(socket_t client_sock, int client_id) {
             break;
         }
 
-        // Broadcast to all other connected clients
-        broadcast(client_id, response);
+        // Broadcast to all other connected clients (with per-client translation)
+        broadcast(client_id, response, locale);
     }
 
     unregister_client(client_id);

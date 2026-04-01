@@ -13,7 +13,7 @@ TranscriberPool::TranscriberPool(const std::string& model_path, int pool_size) {
     std::cout << "[pool] All instances loaded" << std::endl;
 }
 
-std::string TranscriberPool::transcribe(const std::vector<uint8_t>& pcm16_bytes, const std::string& language) {
+TranscribeResult TranscriberPool::transcribe(const std::vector<uint8_t>& pcm16_bytes, const std::string& language) {
     Transcriber* t = nullptr;
 
     // Borrow an available instance (blocks if all are busy)
@@ -25,7 +25,7 @@ std::string TranscriberPool::transcribe(const std::vector<uint8_t>& pcm16_bytes,
     }
 
     // Transcribe outside the lock — multiple threads can run in parallel
-    std::string result = t->transcribe(pcm16_bytes, language);
+    TranscribeResult result = t->transcribe(pcm16_bytes, language);
 
     // Return instance to the pool
     {
