@@ -40,44 +40,11 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(miniaudio)
 
-# ── SentencePiece + CTranslate2 (translation) ───────────────────────────────
-set(SPM_ENABLE_SHARED OFF CACHE BOOL "" FORCE)
-set(SPM_ENABLE_TCMALLOC OFF CACHE BOOL "" FORCE)
-
-FetchContent_Declare(
-    sentencepiece
-    GIT_REPOSITORY https://github.com/google/sentencepiece.git
-    GIT_TAG        v0.2.0
-    GIT_SHALLOW    TRUE
-)
-FetchContent_MakeAvailable(sentencepiece)
-
-set(WITH_MKL OFF CACHE BOOL "" FORCE)
-set(WITH_DNNL OFF CACHE BOOL "" FORCE)
-set(WITH_OPENBLAS OFF CACHE BOOL "" FORCE)
-set(OPENMP_RUNTIME "NONE" CACHE STRING "" FORCE)
-set(BUILD_CLI OFF CACHE BOOL "" FORCE)
-
-if(ENABLE_CUDA)
-    set(WITH_CUDA ON CACHE BOOL "" FORCE)
-    set(WITH_CUDNN OFF CACHE BOOL "" FORCE)
-else()
-    set(WITH_CUDA OFF CACHE BOOL "" FORCE)
-endif()
-
 if(MSVC)
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} /FS")
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /FS")
     set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -Xcompiler=/FS")
 endif()
-
-FetchContent_Declare(
-    ctranslate2
-    GIT_REPOSITORY https://github.com/OpenNMT/CTranslate2.git
-    GIT_TAG        v4.5.0
-    GIT_SHALLOW    TRUE
-)
-FetchContent_MakeAvailable(ctranslate2)
 
 # ── Voice server executable ──────────────────────────────────────────────────
 add_executable(voice-server
@@ -87,11 +54,10 @@ add_executable(voice-server
     src/transcriber_pool.cpp
     src/filter.cpp
     src/protocol.cpp
-    src/translator.cpp
 )
 
-target_include_directories(voice-server PRIVATE src ${sentencepiece_SOURCE_DIR}/src)
-target_link_libraries(voice-server PRIVATE whisper ctranslate2 sentencepiece-static)
+target_include_directories(voice-server PRIVATE src)
+target_link_libraries(voice-server PRIVATE whisper)
 
 if(WIN32)
     target_link_libraries(voice-server PRIVATE ws2_32)

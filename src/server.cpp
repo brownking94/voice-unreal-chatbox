@@ -135,6 +135,16 @@ void Server::broadcast(int sender_id, const std::string& message, const std::str
         std::string msg_to_send = message;
         if (translate_handler_ && !info.locale.empty() && info.locale != source_lang) {
             msg_to_send = translate_handler_(message, source_lang, info.locale);
+        } else {
+            // Same language — strip internal "english" field before sending
+            std::string ekey = ",\"english\":\"";
+            auto epos = msg_to_send.find(ekey);
+            if (epos != std::string::npos) {
+                auto evalue_end = msg_to_send.find('"', epos + ekey.size());
+                if (evalue_end != std::string::npos) {
+                    msg_to_send.erase(epos, evalue_end + 1 - epos);
+                }
+            }
         }
 
         uint32_t msg_len = static_cast<uint32_t>(msg_to_send.size());
