@@ -109,31 +109,18 @@ int main(int argc, char* argv[]) {
         };
     }
 
-    // Handler: auto-detect language → validate against {en, secondary} → filter → respond
-    Server server(port, [&pool, &filter](int client_id, const std::string& secondary_locale, const std::vector<uint8_t>& audio_data) -> std::string {
+    // Handler: transcribe using client's language → filter → respond
+    Server server(port, [&pool, &filter](int client_id, const std::string& locale, const std::vector<uint8_t>& audio_data) -> std::string {
         std::string speaker = "Player" + std::to_string(client_id);
 
-        // First pass: auto-detect language
-        TranscribeResult result = pool.transcribe(audio_data, "auto");
+        TranscribeResult result = pool.transcribe(audio_data, locale);
         if (result.text.empty()) {
             return protocol::make_error("No speech detected");
         }
 
-        // Validate: accept English or the client's secondary language
-        std::string accepted_lang = result.detected_language;
-        if (accepted_lang != "en" && accepted_lang != secondary_locale) {
-            std::cout << "[server] Client #" << client_id << ": detected '" << accepted_lang
-                      << "' not in {en, " << secondary_locale << "}, re-running as English" << std::endl;
-            result = pool.transcribe(audio_data, "en");
-            accepted_lang = "en";
-            if (result.text.empty()) {
-                return protocol::make_error("No speech detected");
-            }
-        }
-
         FilterResult fr = filter.filter(result.text);
 
-        std::cout << "[" << speaker << " (" << accepted_lang << ")] " << fr.original;
+        std::cout << "[" << speaker << " (" << locale << ")] " << fr.original;
         if (!fr.flagged_words.empty()) {
             std::cout << "  (flagged: ";
             for (size_t i = 0; i < fr.flagged_words.size(); i++) {
@@ -144,7 +131,7 @@ int main(int argc, char* argv[]) {
         }
         std::cout << std::endl;
 
-        return protocol::make_response(speaker, accepted_lang, fr.original, fr.flagged_words, fr.redacted);
+        return protocol::make_response(speaker, locale, fr.original, fr.flagged_words, fr.redacted);
     }, translate_handler);
 
     std::cout << "[main] Starting voice server on port " << port

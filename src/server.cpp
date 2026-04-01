@@ -131,15 +131,10 @@ void Server::broadcast(int sender_id, const std::string& message, const std::str
     for (auto& [id, info] : clients_) {
         if (id == sender_id) continue;  // Don't echo back to sender
 
-        // Translate if the receiver's locale differs from the source language
+        // Translate if source and receiver languages differ
         std::string msg_to_send = message;
-        if (translate_handler_ && !info.locale.empty() &&
-            info.locale != source_lang && info.locale != "en") {
-            // Translate into receiver's language
+        if (translate_handler_ && !info.locale.empty() && info.locale != source_lang) {
             msg_to_send = translate_handler_(message, source_lang, info.locale);
-        } else if (translate_handler_ && info.locale == "en" && source_lang != "en") {
-            // Receiver wants English, source is foreign — translate to English
-            msg_to_send = translate_handler_(message, source_lang, "en");
         }
 
         uint32_t msg_len = static_cast<uint32_t>(msg_to_send.size());
